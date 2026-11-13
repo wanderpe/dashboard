@@ -1,0 +1,17 @@
+npm notice run dashboard@0.1.0 dev
+npm notice run next dev --hostname 127.0.0.1 --port 3000
+▲ Next.js 16.4.6 (Turbopack)
+- Local:         http://127.0.0.1:3000
+- Network:       http://127.0.0.1:3000
+- Environments: .env.local
+✓ Ready in 281ms
+✓ Running next.config.ts took 32ms
+- Cache Components enabled
+- Partial Prefetching enabled
+
+ GET /api/auth/session 200 in 119ms (next.js: 43ms, application-code: 76ms)
+ POST /api/chat 401 in 24ms (next.js: 16ms, application-code: 8ms)
+ POST /api/auth/login 200 in 40ms (next.js: 27ms, application-code: 14ms)
+ POST /api/chat 400 in 7ms (next.js: 2ms, application-code: 5ms)
+ POST /api/auth/login 200 in 8ms (next.js: 1.7ms, application-code: 6ms)
+ POST /api/chat 200 in 10.1s (next.js: 2ms, application-code: 10.1s)
