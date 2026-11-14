@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 type CopyState = "idle" | "copied" | "error";
 
@@ -39,7 +40,7 @@ export function CopyShareButton({ value }: { value: string }) {
       return;
     }
 
-    const timeout = window.setTimeout(() => setCopyState("idle"), 2200);
+    const timeout = window.setTimeout(() => setCopyState("idle"), 2400);
     return () => window.clearTimeout(timeout);
   }, [copyState]);
 
@@ -52,36 +53,45 @@ export function CopyShareButton({ value }: { value: string }) {
     }
   }
 
-  const label =
-    copyState === "copied"
-      ? "Path copied"
-      : copyState === "error"
-        ? "Try copy again"
-        : "Copy share path";
+  const isCopied = copyState === "copied";
 
   return (
-    <>
+    <div className="relative">
       <Button
         type="button"
         variant="outline"
         size="lg"
-        className="hud-action min-h-11 w-full justify-between rounded-sm border-cyan-200/40 bg-cyan-300! px-4 text-[#03111c]! hover:border-cyan-100 hover:bg-cyan-200! focus-visible:border-cyan-100 focus-visible:ring-cyan-200/70"
+        className={cn(
+          "tactile-button focus-ring-glow min-h-10 w-full justify-between rounded-xl px-4 text-xs font-medium transition-all duration-200",
+          isCopied
+            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.15)]"
+            : "border-white/10 bg-white/[0.04] text-zinc-200 hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+        )}
         onClick={handleCopy}
       >
-        {label}
-        {copyState === "copied" ? (
-          <Check aria-hidden="true" data-icon="inline-end" />
-        ) : (
-          <Copy aria-hidden="true" data-icon="inline-end" />
-        )}
+        <span className="flex items-center gap-2">
+          {isCopied ? "Share Path Copied!" : "Copy Share Path"}
+        </span>
+        <span
+          className={cn(
+            "flex size-5 items-center justify-center rounded-md transition-colors",
+            isCopied ? "text-emerald-400" : "text-zinc-400"
+          )}
+        >
+          {isCopied ? (
+            <Check className="size-3.5 transition-transform duration-200 scale-110" aria-hidden="true" />
+          ) : (
+            <Copy className="size-3.5" aria-hidden="true" />
+          )}
+        </span>
       </Button>
       <span className="sr-only" aria-live="polite">
-        {copyState === "copied"
-          ? "Windows share path copied to the clipboard."
+        {isCopied
+          ? "Windows share path copied to clipboard."
           : copyState === "error"
-            ? "The Windows share path could not be copied."
+            ? "Failed to copy Windows share path."
             : ""}
       </span>
-    </>
+    </div>
   );
 }

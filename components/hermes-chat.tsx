@@ -233,6 +233,14 @@ export function HermesChat() {
       setConversationId(storedId);
       setMessages(readStoredMessages());
       setStorageReady(true);
+
+      if (typeof window !== "undefined") {
+        const urlParams = new URLSearchParams(window.location.search);
+        const queryParam = urlParams.get("q");
+        if (queryParam) {
+          setComposer(queryParam);
+        }
+      }
     });
     void loadSession();
 
@@ -530,11 +538,11 @@ export function HermesChat() {
     return (
       <main
         id="main-content"
-        className="hud-shell flex min-h-[calc(100svh-61px)] items-center justify-center px-4 lg:min-h-svh"
+        className="ambient-canvas flex min-h-[calc(100svh-61px)] items-center justify-center px-4 lg:min-h-svh"
       >
-        <div className="flex items-center gap-3 font-mono text-xs tracking-[0.18em] text-cyan-100/55 uppercase">
-          <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-          Opening private channel
+        <div className="flex items-center gap-3 font-mono text-xs tracking-wider text-cyan-300 uppercase">
+          <LoaderCircle className="size-4 animate-spin text-cyan-400" aria-hidden="true" />
+          Connecting to Hermes Assistant...
         </div>
       </main>
     );
@@ -544,20 +552,20 @@ export function HermesChat() {
     return (
       <main
         id="main-content"
-        className="hud-shell flex min-h-[calc(100svh-61px)] items-center justify-center px-4 lg:min-h-svh"
+        className="ambient-canvas flex min-h-[calc(100svh-61px)] items-center justify-center px-4 lg:min-h-svh"
       >
-        <div className="w-full max-w-lg border border-rose-300/25 bg-[#071522]/95 p-6 text-rose-50">
-          <CircleAlert className="size-5 text-rose-200" aria-hidden="true" />
-          <h1 className="mt-4 text-xl font-medium">Owner access check failed</h1>
-          <p className="mt-2 text-sm leading-6 text-rose-100/70">{sessionError}</p>
+        <div className="glass-panel w-full max-w-lg rounded-2xl border-rose-500/30 p-8 text-rose-50 shadow-2xl">
+          <CircleAlert className="size-6 text-rose-400" aria-hidden="true" />
+          <h1 className="mt-4 text-xl font-semibold tracking-tight text-white">Owner Access Check Failed</h1>
+          <p className="mt-2 text-sm leading-relaxed text-zinc-300">{sessionError}</p>
           <Button
             type="button"
             variant="outline"
-            className="mt-5 min-h-11 rounded-sm border-rose-200/30 bg-rose-200/10 text-rose-50 hover:bg-rose-200/15"
+            className="tactile-button mt-6 min-h-10 rounded-xl border-rose-500/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20"
             onClick={() => window.location.reload()}
           >
             <RotateCcw data-icon="inline-start" aria-hidden="true" />
-            Retry
+            Retry Connection
           </Button>
         </div>
       </main>
@@ -568,22 +576,21 @@ export function HermesChat() {
     return (
       <main
         id="main-content"
-        className="hud-shell flex min-h-[calc(100svh-61px)] items-center justify-center px-4 py-8 lg:min-h-svh"
+        className="ambient-canvas flex min-h-[calc(100svh-61px)] items-center justify-center px-4 py-8 lg:min-h-svh"
       >
-        <section className="hud-panel w-full max-w-xl border border-amber-300/25 bg-[#071522]/95 p-6 sm:p-8">
-          <div className="flex size-11 items-center justify-center border border-amber-200/25 bg-amber-200/10 text-amber-100">
-            <KeyRound className="size-5" aria-hidden="true" />
+        <section className="glass-panel w-full max-w-xl rounded-2xl border-amber-500/30 p-8 text-zinc-100 shadow-2xl">
+          <div className="flex size-12 items-center justify-center rounded-xl border border-amber-400/20 bg-amber-400/10 text-amber-300">
+            <KeyRound className="size-6" aria-hidden="true" />
           </div>
-          <p className="mt-6 font-mono text-[10px] tracking-[0.2em] text-amber-100/55 uppercase">
-            Owner gate // Configuration required
-          </p>
-          <h1 className="mt-2 text-2xl font-medium tracking-tight text-[#f2fdff]">
-            Owner access is not configured
+          <span className="mt-6 inline-block font-mono text-xs font-medium tracking-wider text-amber-400 uppercase">
+            Configuration Required
+          </span>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">
+            Owner Access Is Not Configured
           </h1>
-          <p className="mt-3 text-sm leading-7 text-slate-300/75">
-            Set a private <code className="font-mono text-cyan-100">DASHBOARD_OWNER_TOKEN</code>{" "}
-            in the dashboard server environment, then restart the dashboard. The setup steps are
-            documented in the project README.
+          <p className="mt-3 text-sm leading-relaxed text-zinc-300">
+            Set a private <code className="font-mono text-cyan-300 px-1 py-0.5 rounded bg-white/5 border border-white/10">DASHBOARD_OWNER_TOKEN</code> in
+            your server environment, then restart the dashboard container.
           </p>
         </section>
       </main>
@@ -594,29 +601,28 @@ export function HermesChat() {
     return (
       <main
         id="main-content"
-        className="hud-shell flex min-h-[calc(100svh-61px)] items-center justify-center px-4 py-8 lg:min-h-svh"
+        className="ambient-canvas flex min-h-[calc(100svh-61px)] items-center justify-center px-4 py-8 lg:min-h-svh"
       >
-        <section className="hud-panel w-full max-w-md border border-cyan-200/20 bg-[#071522]/95 p-6 sm:p-8">
-          <div className="flex size-11 items-center justify-center border border-cyan-200/25 bg-cyan-300/[0.06] text-cyan-200">
-            <LockKeyhole className="size-5" aria-hidden="true" />
+        <section className="glass-panel w-full max-w-md rounded-2xl border-white/10 p-8 text-zinc-100 shadow-2xl">
+          <div className="flex size-12 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">
+            <LockKeyhole className="size-6" aria-hidden="true" />
           </div>
-          <p className="mt-6 font-mono text-[10px] tracking-[0.22em] text-cyan-100/45 uppercase">
-            Private channel // Owner only
-          </p>
-          <h1 className="mt-2 text-2xl font-medium tracking-tight text-[#f2fdff]">
-            Unlock Hermes Chat
+          <span className="mt-6 inline-block font-mono text-xs font-medium tracking-wider text-cyan-400 uppercase">
+            Private Channel &middot; Owner Authentication
+          </span>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">
+            Unlock Hermes Assistant
           </h1>
-          <p className="mt-3 text-sm leading-6 text-slate-300/70">
-            Enter the dashboard owner token. It is exchanged for an HTTP-only browser-session
-            cookie and is not stored in the page.
+          <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+            Enter the private dashboard owner token to establish a secured session cookie.
           </p>
 
           <form className="mt-6" onSubmit={authenticate}>
             <label
               htmlFor="owner-token"
-              className="font-mono text-[10px] tracking-[0.18em] text-cyan-100/50 uppercase"
+              className="font-mono text-xs font-medium tracking-wider text-zinc-400 uppercase"
             >
-              Owner token
+              Owner Token
             </label>
             <input
               id="owner-token"
@@ -626,25 +632,25 @@ export function HermesChat() {
               autoComplete="current-password"
               required
               minLength={24}
-              className="mt-2 min-h-11 w-full rounded-sm border border-cyan-200/20 bg-[#020b14] px-3 text-sm text-cyan-50 outline-none placeholder:text-slate-500 focus-visible:border-cyan-200/70 focus-visible:ring-2 focus-visible:ring-cyan-200/40"
-              placeholder="Enter private owner token"
+              className="mt-2 min-h-11 w-full rounded-xl border border-white/10 bg-black/40 px-3.5 text-sm text-white outline-none placeholder:text-zinc-500 focus-ring-glow"
+              placeholder="Paste owner token (min 24 characters)"
             />
             {authError ? (
-              <p role="alert" className="mt-3 text-sm leading-6 text-rose-200">
+              <p role="alert" className="mt-3 text-xs leading-relaxed text-rose-400">
                 {authError}
               </p>
             ) : null}
             <Button
               type="submit"
-              className="mt-5 min-h-11 w-full rounded-sm border border-cyan-100 bg-cyan-200 text-[#03111c] hover:bg-cyan-100 focus-visible:ring-cyan-100/70"
+              className="tactile-button focus-ring-glow mt-5 min-h-11 w-full rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 font-semibold text-white shadow-lg shadow-cyan-500/20 hover:from-cyan-400 hover:to-blue-500"
               disabled={authenticating || ownerToken.length < 24}
             >
               {authenticating ? (
-                <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden="true" />
+                <LoaderCircle className="animate-spin size-4" data-icon="inline-start" aria-hidden="true" />
               ) : (
-                <LockKeyhole data-icon="inline-start" aria-hidden="true" />
+                <LockKeyhole className="size-4" data-icon="inline-start" aria-hidden="true" />
               )}
-              {authenticating ? "Unlocking…" : "Unlock chat"}
+              {authenticating ? "Authenticating..." : "Unlock Assistant"}
             </Button>
           </form>
         </section>
@@ -658,44 +664,44 @@ export function HermesChat() {
   return (
     <main
       id="main-content"
-      className="hud-shell grid h-[calc(100svh-61px)] min-h-[36rem] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden lg:h-svh"
+      className="ambient-canvas grid h-[calc(100svh-61px)] min-h-[36rem] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden lg:h-svh text-zinc-100"
     >
-      <header className="relative z-10 border-b border-cyan-100/10 bg-[#03101b]/88 px-4 py-4 sm:px-6 lg:px-8">
+      <header className="relative z-10 border-b border-white/[0.08] bg-[#07090e]/85 backdrop-blur-xl px-4 py-4 sm:px-6 lg:px-8">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
-            <div className="flex items-center gap-2 font-mono text-[10px] tracking-[0.2em] text-cyan-100/45 uppercase">
-              <MessageSquareText className="size-3.5 text-cyan-200/70" aria-hidden="true" />
-              Private agent channel
+            <div className="flex items-center gap-2 font-mono text-xs tracking-wider text-cyan-400 uppercase">
+              <MessageSquareText className="size-3.5" aria-hidden="true" />
+              <span>Hermes Agent Channel</span>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-3">
-              <h1 className="text-xl font-medium tracking-tight text-[#f2fdff] sm:text-2xl">
-                Hermes Chat
+              <h1 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
+                Hermes Assistant
               </h1>
-              <Badge variant="outline" className={cn("rounded-sm", mode.className)}>
+              <Badge variant="outline" className={cn("rounded-md text-[10px] font-mono", mode.className)}>
                 {mode.label}
               </Badge>
             </div>
-            <p className="mt-1 text-xs leading-5 text-slate-300/55">{mode.description}</p>
+            <p className="mt-1 text-xs text-zinc-400">{mode.description}</p>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               variant="outline"
-              className="min-h-11 rounded-sm border-cyan-200/20 bg-cyan-300/[0.04] text-cyan-50 hover:bg-cyan-300/[0.09]"
+              className="tactile-button rounded-xl border-white/10 bg-white/[0.04] text-zinc-200 hover:bg-white/[0.08] hover:text-white text-xs"
               onClick={startNewConversation}
             >
-              <Plus data-icon="inline-start" aria-hidden="true" />
-              New conversation
+              <Plus className="size-3.5" data-icon="inline-start" aria-hidden="true" />
+              New Conversation
             </Button>
             <Button
               type="button"
               variant="ghost"
-              className="min-h-11 rounded-sm text-slate-300/70 hover:bg-cyan-300/[0.06] hover:text-cyan-50"
+              className="tactile-button rounded-xl text-zinc-400 hover:bg-white/[0.06] hover:text-white text-xs"
               onClick={() => void signOut()}
             >
-              <LogOut data-icon="inline-start" aria-hidden="true" />
-              Sign out
+              <LogOut className="size-3.5" data-icon="inline-start" aria-hidden="true" />
+              Sign Out
             </Button>
           </div>
         </div>
@@ -704,7 +710,7 @@ export function HermesChat() {
       <section
         aria-label="Hermes conversation"
         aria-busy={streaming}
-        className="relative z-10 overflow-y-auto px-4 py-5 sm:px-6 sm:py-7 lg:px-8"
+        className="relative z-10 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8 lg:px-8"
       >
         <div
           role="log"
@@ -713,19 +719,16 @@ export function HermesChat() {
           className="mx-auto flex w-full max-w-5xl flex-col gap-5"
         >
           {messages.length === 0 ? (
-            <div className="my-auto flex min-h-[18rem] flex-col justify-center border border-cyan-200/15 bg-[#061523]/82 p-6 sm:p-8">
-              <div className="flex size-11 items-center justify-center border border-cyan-200/20 bg-cyan-300/[0.05] text-cyan-200">
-                <Bot className="size-5" aria-hidden="true" />
+            <div className="my-auto flex min-h-[18rem] flex-col justify-center rounded-2xl glass-panel p-8 text-center sm:p-10">
+              <div className="mx-auto flex size-12 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">
+                <Bot className="size-6" aria-hidden="true" />
               </div>
-              <p className="mt-6 font-mono text-[10px] tracking-[0.2em] text-cyan-100/45 uppercase">
-                Conversation ready
-              </p>
-              <h2 className="mt-2 text-2xl font-medium tracking-tight text-[#f2fdff]">
-                What should Hermes work on?
+              <h2 className="mt-4 text-2xl font-semibold tracking-tight text-white">
+                How can Hermes assist your home lab?
               </h2>
-              <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300/70">
-                This conversation lasts for the current browser session. Hermes can use the tools
-                and model configured on the local agent.
+              <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-zinc-400">
+                Hermes has direct diagnostic access to the local agent tools. Query container states,
+                system resources, or request infrastructure troubleshooting.
               </p>
             </div>
           ) : (
@@ -733,73 +736,70 @@ export function HermesChat() {
               <article
                 key={message.id}
                 className={cn(
-                  "grid gap-3 sm:grid-cols-[2.5rem_minmax(0,1fr)]",
-                  message.role === "user" && "sm:pl-14",
+                  "flex gap-3",
+                  message.role === "user" ? "justify-end" : "justify-start"
                 )}
               >
-                <div
-                  className={cn(
-                    "flex size-10 items-center justify-center border",
-                    message.role === "assistant"
-                      ? "border-cyan-200/20 bg-cyan-300/[0.05] text-cyan-200"
-                      : "border-slate-300/15 bg-slate-200/[0.05] text-slate-200/70",
-                  )}
-                  aria-hidden="true"
-                >
-                  {message.role === "assistant" ? (
+                {message.role === "assistant" ? (
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-cyan-400/20 bg-cyan-400/10 text-cyan-300 mt-1">
                     <Bot className="size-4" />
-                  ) : (
-                    <UserRound className="size-4" />
-                  )}
-                </div>
+                  </div>
+                ) : null}
+
                 <div
                   className={cn(
-                    "min-w-0 border p-4 sm:p-5",
-                    message.role === "assistant"
-                      ? "border-cyan-200/15 bg-[#061523]/90 text-slate-100"
-                      : "border-slate-300/12 bg-[#091522]/72 text-slate-100",
+                    "min-w-0 max-w-2xl rounded-2xl p-4 sm:p-5 shadow-sm text-sm leading-relaxed",
+                    message.role === "user"
+                      ? "border border-cyan-500/20 bg-cyan-500/10 text-white"
+                      : "glass-card-static border-white/[0.08] text-zinc-200"
                   )}
                 >
-                  <p className="mb-2 font-mono text-[9px] tracking-[0.18em] text-cyan-100/40 uppercase">
-                    {message.role === "assistant" ? "Hermes" : "Harvy"}
+                  <p className="mb-1.5 font-mono text-[10px] font-medium tracking-wider text-zinc-400 uppercase">
+                    {message.role === "assistant" ? "Hermes Agent" : "Harvy"}
                   </p>
                   {message.content ? (
-                    <div className="whitespace-pre-wrap break-words text-sm leading-7 sm:text-[0.95rem]">
+                    <div className="whitespace-pre-wrap break-words">
                       {message.content}
                     </div>
                   ) : (
-                    <div className="flex items-center gap-2 text-sm text-cyan-100/55">
-                      <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-                      Waiting for reply…
+                    <div className="flex items-center gap-2 text-xs text-cyan-300">
+                      <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+                      Generating response...
                     </div>
                   )}
                 </div>
+
+                {message.role === "user" ? (
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] text-zinc-300 mt-1">
+                    <UserRound className="size-4" />
+                  </div>
+                ) : null}
               </article>
             ))
           )}
 
           {activity ? (
-            <div className="flex items-center gap-2 pl-1 font-mono text-[10px] tracking-[0.14em] text-cyan-100/45 uppercase">
+            <div className="flex items-center gap-2 pl-1 font-mono text-[11px] text-cyan-300">
               <Wrench className="size-3.5" aria-hidden="true" />
-              {activity}
+              <span>{activity}</span>
             </div>
           ) : null}
 
           {chatError ? (
             <div
               role="alert"
-              className="border border-rose-300/25 bg-rose-300/[0.07] p-4 text-rose-50"
+              className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-rose-200"
             >
               <div className="flex items-start gap-3">
-                <CircleAlert className="mt-0.5 size-4 shrink-0 text-rose-200" aria-hidden="true" />
+                <CircleAlert className="mt-0.5 size-4 shrink-0 text-rose-300" aria-hidden="true" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm leading-6">{chatError.message}</p>
+                  <p className="text-sm leading-relaxed">{chatError.message}</p>
                   {chatError.retry ? (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="mt-3 min-h-9 rounded-sm border-rose-200/30 bg-rose-200/10 text-rose-50 hover:bg-rose-200/15"
+                      className="tactile-button mt-3 rounded-lg border-rose-500/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20"
                       disabled={streaming}
                       onClick={() =>
                         void sendMessage(chatError.retry!.content, {
@@ -809,7 +809,7 @@ export function HermesChat() {
                       }
                     >
                       <RotateCcw data-icon="inline-start" aria-hidden="true" />
-                      Retry request
+                      Retry Request
                     </Button>
                   ) : null}
                 </div>
@@ -820,12 +820,12 @@ export function HermesChat() {
         </div>
       </section>
 
-      <div className="relative z-10 border-t border-cyan-100/10 bg-[#03101b]/96 px-4 py-3 sm:px-6 sm:py-4 lg:px-8">
+      <div className="relative z-10 border-t border-white/[0.08] bg-[#07090e]/90 backdrop-blur-xl px-4 py-3 sm:px-6 sm:py-4 lg:px-8">
         <form className="mx-auto w-full max-w-5xl" onSubmit={submitMessage}>
           <label htmlFor="chat-composer" className="sr-only">
             Message Hermes
           </label>
-          <div className="grid gap-2 border border-cyan-200/18 bg-[#020b14] p-2 focus-within:border-cyan-200/45 focus-within:ring-2 focus-within:ring-cyan-200/20 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+          <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-black/40 p-2.5 focus-within:border-cyan-400/50 focus-within:ring-2 focus-within:ring-cyan-400/20">
             <textarea
               ref={textareaRef}
               id="chat-composer"
@@ -837,27 +837,27 @@ export function HermesChat() {
               disabled={composerDisabled}
               placeholder={
                 session.chatMode === "unconfigured"
-                  ? "Configure the Hermes API key to enable chat"
-                  : "Message Hermes…"
+                  ? "Configure the Hermes API key to enable live agent chat"
+                  : "Ask Hermes about home lab status, Docker, or server diagnostics..."
               }
-              className="max-h-40 min-h-14 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-cyan-50 outline-none placeholder:text-slate-500 disabled:cursor-not-allowed disabled:opacity-55"
+              className="max-h-40 min-h-12 w-full resize-none bg-transparent px-2.5 py-1 text-sm leading-relaxed text-white outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed disabled:opacity-55"
             />
             <Button
               type="submit"
-              className="min-h-11 rounded-sm border border-cyan-100 bg-cyan-200 px-4 text-[#03111c] hover:bg-cyan-100 focus-visible:ring-cyan-100/70"
+              className="tactile-button focus-ring-glow min-h-10 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 text-xs font-semibold text-white shadow-md hover:from-cyan-400 hover:to-blue-500"
               disabled={composerDisabled || !composer.trim()}
             >
               {streaming ? (
-                <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden="true" />
+                <LoaderCircle className="animate-spin size-3.5" data-icon="inline-start" aria-hidden="true" />
               ) : (
-                <Send data-icon="inline-start" aria-hidden="true" />
+                <Send className="size-3.5" data-icon="inline-start" aria-hidden="true" />
               )}
-              {streaming ? "Working…" : "Send"}
+              {streaming ? "Thinking..." : "Send"}
             </Button>
           </div>
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 font-mono text-[9px] tracking-[0.12em] text-cyan-100/35 uppercase">
-            <span>Enter to send // Shift+Enter for newline</span>
-            <span>Browser-session conversation</span>
+          <div className="mt-2 flex items-center justify-between font-mono text-[10px] text-zinc-500">
+            <span>Return to send &middot; Shift+Return for newline</span>
+            <span>Secured Browser Session</span>
           </div>
         </form>
       </div>

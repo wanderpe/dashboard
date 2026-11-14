@@ -3,32 +3,25 @@
 import { useEffect, useState } from "react";
 import {
   Activity,
+  AlertCircle,
   Clock3,
   Cpu,
   Database,
   HardDrive,
   MemoryStick,
-  Server,
+  RefreshCw,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import type {
   EndpointCheck,
-  FilesystemValue,
-  Reading,
-  StorageReading,
   TelemetryResponse,
 } from "@/lib/telemetry-types";
+import { cn } from "@/lib/utils";
 
 const POLL_INTERVAL_MS = 15_000;
+const CLOCK_INTERVAL_MS = 10_000;
 
 function formatBytes(bytes: number) {
   if (!Number.isFinite(bytes) || bytes < 0) {
@@ -52,17 +45,14 @@ function formatUptime(seconds: number) {
   if (days > 0) {
     return `${days}d ${hours}h ${minutes}m`;
   }
-
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
   }
-
   return `${minutes}m`;
 }
 
 function formatUpdateTime(value: string) {
   const date = new Date(value);
-
   if (Number.isNaN(date.getTime())) {
     return "Unknown";
   }
@@ -74,108 +64,50 @@ function formatUpdateTime(value: string) {
   }).format(date);
 }
 
-function filesystemDisplay(reading: Reading<FilesystemValue>) {
-  if (reading.state === "unavailable") {
-    return {
-      value: "Unavailable",
-      detail: reading.message,
-      unavailable: true,
-    };
-  }
-
-  return {
-    value: `${formatBytes(reading.value.availableBytes)} free`,
-    detail: `${formatBytes(reading.value.totalBytes)} total · ${reading.value.path}`,
-    unavailable: false,
-  };
-}
-
-function storageDisplay(reading: StorageReading) {
-  if (reading.state === "not-mounted") {
-    return {
-      value: "Not mounted",
-      detail: `${reading.path} has no mounted filesystem`,
-      unavailable: true,
-    };
-  }
-
-  if (reading.state === "unavailable") {
-    return {
-      value: "Unavailable",
-      detail: reading.message,
-      unavailable: true,
-    };
-  }
-
-  return {
-    value: `${formatBytes(reading.value.availableBytes)} free`,
-    detail: `${formatBytes(reading.value.totalBytes)} total · mounted at ${reading.value.path}`,
-    unavailable: false,
-  };
-}
-
-function Metric({
-  icon: Icon,
-  label,
-  value,
-  detail,
-  unavailable = false,
-}: {
-  icon: typeof Cpu;
-  label: string;
-  value: string;
-  detail: string;
-  unavailable?: boolean;
-}) {
-  return (
-    <div className="border border-cyan-100/10 bg-cyan-300/[0.025] p-4">
-      <div className="flex items-center gap-2 font-mono text-[10px] tracking-[0.18em] text-cyan-100/45 uppercase">
-        <Icon className="size-3.5" aria-hidden="true" />
-        {label}
-      </div>
-      <p
-        className={cn(
-          "mt-3 text-lg font-medium tracking-tight",
-          unavailable ? "text-amber-200" : "text-[#f2fdff]"
-        )}
-      >
-        {value}
-      </p>
-      <p className="mt-1 text-xs leading-5 text-slate-300/60">{detail}</p>
-    </div>
-  );
-}
-
-function ReachabilityCheck({ check }: { check: EndpointCheck }) {
+function ReachabilityBadge({ check }: { check: EndpointCheck }) {
   const reachable = check.state === "reachable";
+  const latency = check.latencyMs;
 
   return (
-    <li className="border border-cyan-100/10 bg-[#03101b]/70 p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-[#f2fdff]">{check.label}</p>
-          <code className="mt-1 block font-mono text-[11px] text-cyan-100/45">
-            {check.host}:{check.port}
-          </code>
-        </div>
-        <Badge
-          variant="outline"
-          className={cn(
-            "rounded-sm font-mono text-[10px] tracking-[0.12em] uppercase",
-            reachable
-              ? "border-cyan-200/25 bg-cyan-300/[0.06] text-cyan-100"
-              : "border-amber-200/25 bg-amber-300/[0.06] text-amber-100"
+    <div className="glass-card-static flex items-center justify-between rounded-xl p-3.5 transition-colors hover:border-white/15">
+      <div className="flex items-center gap-3">
+        <span className="relative flex size-2.5 shrink-0">
+          {reachable ? (
+            <>
+              <span className="animate-live-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex size-2.5 rounded-full bg-emerald-500" />
+            </>
+          ) : (
+            <span className="relative inline-flex size-2.5 rounded-full bg-rose-500" />
           )}
-        >
-          {reachable ? "Reachable" : "Unreachable"}
-        </Badge>
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-white tracking-tight">{check.label}</p>
+          <p className="font-mono text-[11px] text-zinc-400 truncate">
+            {check.host}:{check.port}
+          </p>
+        </div>
       </div>
-      <p className="mt-3 text-xs text-slate-300/55">
-        {reachable
-          ? `Checked from Debian · ${check.latencyMs} ms`
-          : `Checked from Debian · ${check.message ?? "Connection failed"}`}
-      </p>
-    </li>
+
+      <div className="flex items-center gap-2">
+        {reachable && latency !== null ? (
+          <span
+            className={cn(
+              "font-mono text-[11px] font-medium px-2 py-0.5 rounded-md",
+              latency < 30
+                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                : "bg-cyan-500/10 text-cyan-400 border border-cyan-500/20"
+            )}
+          >
+            {latency} ms
+          </span>
+        ) : (
+          <span className="font-mono text-[11px] px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-400 border border-rose-500/20">
+            {check.message ?? "Offline"}
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -183,6 +115,7 @@ export function SystemTelemetry() {
   const [telemetry, setTelemetry] = useState<TelemetryResponse | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(0);
 
   useEffect(() => {
@@ -229,7 +162,7 @@ export function SystemTelemetry() {
 
     void refresh();
     const refreshTimer = window.setInterval(() => void refresh(), POLL_INTERVAL_MS);
-    const clockTimer = window.setInterval(() => setNow(Date.now()), 1_000);
+    const clockTimer = window.setInterval(() => setNow(Date.now()), CLOCK_INTERVAL_MS);
 
     return () => {
       cancelled = true;
@@ -239,188 +172,254 @@ export function SystemTelemetry() {
     };
   }, []);
 
+  async function handleManualRefresh() {
+    setRefreshing(true);
+    try {
+      const response = await fetch("/api/telemetry", { cache: "no-store" });
+      if (response.ok) {
+        const data = (await response.json()) as TelemetryResponse;
+        setTelemetry(data);
+        setRefreshError(null);
+        setNow(Date.now());
+      }
+    } catch (err) {
+      setRefreshError(err instanceof Error ? err.message : "Manual refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   const lastUpdateMs = telemetry ? Date.parse(telemetry.generatedAt) : 0;
   const stale = Boolean(
-    telemetry &&
-      now > 0 &&
-      now - lastUpdateMs > telemetry.staleAfterSeconds * 1_000,
+    telemetry && now > 0 && now - lastUpdateMs > telemetry.staleAfterSeconds * 1_000
   );
 
-  const loadAverage = telemetry?.system.loadAverage;
   const memory = telemetry?.system.memory;
-  const uptime = telemetry?.system.uptime;
-  const root = telemetry
-    ? filesystemDisplay(telemetry.system.filesystems.root)
+  const loadAverage = telemetry?.system.loadAverage;
+  const uptimeSeconds = telemetry?.system.uptime?.state === "available"
+    ? telemetry.system.uptime.value.seconds
     : null;
-  const storage = telemetry
-    ? storageDisplay(telemetry.system.filesystems.storage)
-    : null;
+  const rootFs = telemetry?.system.filesystems.root;
+  const storageFs = telemetry?.system.filesystems.storage;
+
+  // Calculate memory usage %
+  let memPercentage = 0;
+  let memUsedFormatted = "Unavailable";
+  let memTotalFormatted = "Unavailable";
+  if (memory?.state === "available") {
+    const total = memory.value.totalBytes;
+    const available = memory.value.availableBytes;
+    const used = Math.max(0, total - available);
+    memPercentage = Math.min(100, Math.round((used / total) * 100));
+    memUsedFormatted = formatBytes(used);
+    memTotalFormatted = formatBytes(total);
+  }
+
+  // Calculate root fs usage %
+  let rootPercentage = 0;
+  let rootUsedFormatted = "Unavailable";
+  let rootTotalFormatted = "Unavailable";
+  if (rootFs?.state === "available") {
+    const total = rootFs.value.totalBytes;
+    const available = rootFs.value.availableBytes;
+    const used = Math.max(0, total - available);
+    rootPercentage = Math.min(100, Math.round((used / total) * 100));
+    rootUsedFormatted = formatBytes(used);
+    rootTotalFormatted = formatBytes(total);
+  }
+
+  // Calculate storage fs usage %
+  let storagePercentage = 0;
+  let storageUsedFormatted = "Unavailable";
+  let storageTotalFormatted = "Unavailable";
+  let storageMounted = false;
+  if (storageFs?.state === "available") {
+    storageMounted = true;
+    const total = storageFs.value.totalBytes;
+    const available = storageFs.value.availableBytes;
+    const used = Math.max(0, total - available);
+    storagePercentage = Math.min(100, Math.round((used / total) * 100));
+    storageUsedFormatted = formatBytes(used);
+    storageTotalFormatted = formatBytes(total);
+  }
 
   return (
-    <section className="mt-6" aria-labelledby="telemetry-heading">
-      <Card className="hud-panel rounded-sm border border-cyan-200/15 bg-[#061523]/95 py-0 text-[#e8fbff] ring-0 shadow-[0_24px_80px_rgba(0,0,0,0.22)]">
-        <CardHeader className="gap-5 border-b border-cyan-100/10 p-5 sm:grid sm:grid-cols-[1fr_auto] sm:items-start sm:p-6">
-          <div>
-            <div className="mb-4 flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center border border-cyan-200/20 bg-cyan-300/[0.05] text-cyan-200">
-                <Activity className="size-5" aria-hidden="true" />
-              </div>
-              <Badge
-                variant="outline"
-                className="rounded-sm border-cyan-200/15 bg-cyan-300/[0.04] font-mono text-[10px] tracking-[0.18em] text-cyan-100/70 uppercase"
-              >
-                TEL // READ ONLY
-              </Badge>
-            </div>
-            <CardTitle className="text-2xl font-medium tracking-[-0.025em] text-[#f2fdff]">
-              <h2 id="telemetry-heading">System Telemetry</h2>
-            </CardTitle>
-            <CardDescription className="mt-2 max-w-2xl leading-6 text-slate-300/70">
-              Real readings collected on Debian. Refreshes every 15 seconds.
-            </CardDescription>
-          </div>
-
-          <div className="sm:text-right">
-            <Badge
-              variant="outline"
-              className={`rounded-sm font-mono text-[10px] tracking-[0.14em] uppercase ${
-                stale || refreshError
-                  ? "border-amber-200/25 bg-amber-300/[0.06] text-amber-100"
-                  : telemetry
-                    ? "border-cyan-200/25 bg-cyan-300/[0.06] text-cyan-100"
-                    : "border-cyan-100/10 text-cyan-100/45"
-              }`}
-            >
-              {loading
-                ? "Acquiring"
-                : stale
-                  ? "Stale"
-                  : refreshError
-                    ? "Refresh failed"
-                    : "Debian source"}
+    <section aria-labelledby="telemetry-heading" className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Activity className="size-4 text-cyan-400" aria-hidden="true" />
+          <h2 id="telemetry-heading" className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">
+            Live System Telemetry
+          </h2>
+          {stale ? (
+            <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-300 text-[10px]">
+              Stale Data
             </Badge>
-            <p className="mt-2 font-mono text-[10px] leading-5 tracking-[0.12em] text-cyan-100/40 uppercase">
-              Last successful update
-              <br />
-              {telemetry ? formatUpdateTime(telemetry.generatedAt) : "None"}
-            </p>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-xs text-zinc-400 hidden sm:inline">
+            Updated {telemetry ? formatUpdateTime(telemetry.generatedAt) : "..."}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={handleManualRefresh}
+            disabled={refreshing || loading}
+            className="tactile-button focus-ring-glow rounded-lg border-white/10 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08] hover:text-white"
+          >
+            <RefreshCw
+              className={cn("size-3", (refreshing || loading) && "animate-spin text-cyan-400")}
+              aria-hidden="true"
+            />
+            <span>Refresh</span>
+          </Button>
+        </div>
+      </div>
+
+      {refreshError ? (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-300 flex items-center gap-2.5">
+          <AlertCircle className="size-4 shrink-0" aria-hidden="true" />
+          <span>{refreshError}</span>
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* RAM Usage Card */}
+        <div className="glass-panel rounded-2xl p-5 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-zinc-400">Memory (RAM)</span>
+              <MemoryStick className="size-4 text-cyan-400" aria-hidden="true" />
+            </div>
+            <div className="mt-3 flex items-baseline gap-2">
+              <span className="text-2xl font-bold tracking-tight text-white">{memPercentage}%</span>
+              <span className="text-xs text-zinc-400">used</span>
+            </div>
+            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-500"
+                style={{ width: `${memPercentage}%` }}
+              />
+            </div>
           </div>
-        </CardHeader>
+          <p className="mt-4 font-mono text-[11px] text-zinc-400">
+            {memUsedFormatted} / {memTotalFormatted}
+          </p>
+        </div>
 
-        <CardContent className="p-5 sm:p-6">
-          {refreshError && (
-            <div
-              role="status"
-              className="mb-5 border border-amber-200/20 bg-amber-300/[0.05] px-4 py-3 text-sm text-amber-100"
-            >
-              {telemetry
-                ? `Refresh failed. Showing the last successful reading. ${refreshError}`
-                : `Telemetry unavailable. ${refreshError}`}
+        {/* Root Filesystem Card */}
+        <div className="glass-panel rounded-2xl p-5 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-zinc-400">Root Storage (/)</span>
+              <HardDrive className="size-4 text-indigo-400" aria-hidden="true" />
             </div>
-          )}
-
-          {stale && !refreshError && (
-            <div
-              role="status"
-              className="mb-5 border border-amber-200/20 bg-amber-300/[0.05] px-4 py-3 text-sm text-amber-100"
-            >
-              These readings are stale. The last successful update was at {formatUpdateTime(telemetry!.generatedAt)}.
+            <div className="mt-3 flex items-baseline gap-2">
+              <span className="text-2xl font-bold tracking-tight text-white">{rootPercentage}%</span>
+              <span className="text-xs text-zinc-400">used</span>
             </div>
-          )}
-
-          {!telemetry ? (
-            <div className="border border-cyan-100/10 bg-cyan-300/[0.025] p-6 text-sm text-slate-300/65">
-              {loading ? "Collecting Debian telemetry…" : "No telemetry data is available."}
+            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500"
+                style={{ width: `${rootPercentage}%` }}
+              />
             </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                <Metric
-                  icon={Cpu}
-                  label="CPU load"
-                  value={
-                    loadAverage?.state === "available"
-                      ? `${loadAverage.value.oneMinute.toFixed(2)} / ${loadAverage.value.fiveMinutes.toFixed(2)} / ${loadAverage.value.fifteenMinutes.toFixed(2)}`
-                      : "Unavailable"
-                  }
-                  detail={
-                    loadAverage?.state === "available"
-                      ? "1 / 5 / 15 minute load average"
-                      : (loadAverage?.message ?? "Reading unavailable")
-                  }
-                  unavailable={loadAverage?.state !== "available"}
-                />
-                <Metric
-                  icon={MemoryStick}
-                  label="Available RAM"
-                  value={
-                    memory?.state === "available"
-                      ? `${formatBytes(memory.value.availableBytes)} available`
-                      : "Unavailable"
-                  }
-                  detail={
-                    memory?.state === "available"
-                      ? `${formatBytes(memory.value.totalBytes)} total`
-                      : (memory?.message ?? "Reading unavailable")
-                  }
-                  unavailable={memory?.state !== "available"}
-                />
-                <Metric
-                  icon={Clock3}
-                  label="Uptime"
-                  value={
-                    uptime?.state === "available"
-                      ? formatUptime(uptime.value.seconds)
-                      : "Unavailable"
-                  }
-                  detail={
-                    uptime?.state === "available"
-                      ? "Debian system uptime"
-                      : (uptime?.message ?? "Reading unavailable")
-                  }
-                  unavailable={uptime?.state !== "available"}
-                />
-                <Metric
-                  icon={Server}
-                  label="Root filesystem"
-                  value={root?.value ?? "Unavailable"}
-                  detail={root?.detail ?? "Reading unavailable"}
-                  unavailable={root?.unavailable ?? true}
-                />
-                <Metric
-                  icon={HardDrive}
-                  label="Storage filesystem"
-                  value={storage?.value ?? "Unavailable"}
-                  detail={storage?.detail ?? "Reading unavailable"}
-                  unavailable={storage?.unavailable ?? true}
-                />
-              </div>
+          </div>
+          <p className="mt-4 font-mono text-[11px] text-zinc-400">
+            {rootUsedFormatted} / {rootTotalFormatted}
+          </p>
+        </div>
 
-              <div className="mt-6 border-t border-cyan-100/10 pt-5">
-                <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                  <div>
-                    <p className="font-mono text-[10px] tracking-[0.2em] text-cyan-100/45 uppercase">
-                      Fixed endpoint reachability
-                    </p>
-                    <h3 className="mt-1 text-base font-medium text-[#f2fdff]">
-                      Checks from Debian
-                    </h3>
-                  </div>
-                  <p className="flex items-center gap-2 text-xs text-slate-300/50">
-                    <Database className="size-3.5" aria-hidden="true" />
-                    TCP connection checks with short timeouts
-                  </p>
+        {/* Shared Storage (/srv/storage) */}
+        <div className="glass-panel rounded-2xl p-5 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-zinc-400">Pool (/srv/storage)</span>
+              <Database className="size-4 text-amber-400" aria-hidden="true" />
+            </div>
+            {storageMounted ? (
+              <>
+                <div className="mt-3 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold tracking-tight text-white">{storagePercentage}%</span>
+                  <span className="text-xs text-zinc-400">used</span>
                 </div>
-                <ul className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                  {telemetry.reachability.map((check) => (
-                    <ReachabilityCheck key={check.id} check={check} />
-                  ))}
-                </ul>
+                <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all duration-500"
+                    style={{ width: `${storagePercentage}%` }}
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="mt-3">
+                <span className="text-sm font-semibold text-amber-300">Not Mounted</span>
+                <p className="text-[11px] text-zinc-400 mt-1">Standby mountpoint</p>
               </div>
-            </>
+            )}
+          </div>
+          <p className="mt-4 font-mono text-[11px] text-zinc-400">
+            {storageMounted ? `${storageUsedFormatted} / ${storageTotalFormatted}` : "/srv/storage"}
+          </p>
+        </div>
+
+        {/* CPU Load & Uptime */}
+        <div className="glass-panel rounded-2xl p-5 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-zinc-400">CPU Load Average</span>
+              <Cpu className="size-4 text-emerald-400" aria-hidden="true" />
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-center">
+                <span className="block font-mono text-sm font-bold text-white">
+                  {loadAverage?.state === "available" ? loadAverage.value.oneMinute.toFixed(2) : "--"}
+                </span>
+                <span className="text-[10px] text-zinc-400">1m</span>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-center">
+                <span className="block font-mono text-sm font-bold text-zinc-200">
+                  {loadAverage?.state === "available" ? loadAverage.value.fiveMinutes.toFixed(2) : "--"}
+                </span>
+                <span className="text-[10px] text-zinc-400">5m</span>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-center">
+                <span className="block font-mono text-sm font-bold text-zinc-400">
+                  {loadAverage?.state === "available" ? loadAverage.value.fifteenMinutes.toFixed(2) : "--"}
+                </span>
+                <span className="text-[10px] text-zinc-400">15m</span>
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 flex items-center gap-1.5 text-xs text-zinc-400">
+            <Clock3 className="size-3.5 text-zinc-400" aria-hidden="true" />
+            <span>Uptime: {uptimeSeconds !== null ? formatUptime(uptimeSeconds) : "..."}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Network Endpoint Reachability List */}
+      <div className="glass-panel rounded-2xl p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-xs font-semibold tracking-wide text-zinc-300 uppercase">
+            Service Endpoint Reachability (Debian Ping)
+          </span>
+          <span className="font-mono text-[11px] text-zinc-400">TCP Socket Health</span>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {telemetry?.reachability ? (
+            telemetry.reachability.map((check) => (
+              <ReachabilityBadge key={check.id} check={check} />
+            ))
+          ) : (
+            <div className="col-span-3 py-4 text-center text-xs text-zinc-400">
+              Checking endpoint status...
+            </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </section>
   );
 }
