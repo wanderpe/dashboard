@@ -1,6 +1,6 @@
 import { readFile, statfs } from "node:fs/promises";
 import { createConnection } from "node:net";
-import { loadavg, uptime } from "node:os";
+import { freemem, loadavg, totalmem, uptime } from "node:os";
 
 import type {
   EndpointCheck,
@@ -49,18 +49,22 @@ function decodeMountField(value: string) {
 }
 
 async function isExactMountPoint(path: string) {
-  const mountInfo = await readFile("/proc/self/mountinfo", "utf8");
+  try {
+    const mountInfo = await readFile("/proc/self/mountinfo", "utf8");
 
-  return mountInfo.split("\n").some((line) => {
-    const separatorIndex = line.indexOf(" - ");
-    if (separatorIndex === -1) {
-      return false;
-    }
+    return mountInfo.split("\n").some((line) => {
+      const separatorIndex = line.indexOf(" - ");
+      if (separatorIndex === -1) {
+        return false;
+      }
 
-    const fields = line.slice(0, separatorIndex).split(" ");
-    const mountPoint = fields[4];
-    return mountPoint ? decodeMountField(mountPoint) === path : false;
-  });
+      const fields = line.slice(0, separatorIndex).split(" ");
+      const mountPoint = fields[4];
+      return mountPoint ? decodeMountField(mountPoint) === path : false;
+    });
+  } catch {
+    return false;
+  }
 }
 
 async function readFilesystem(path: string): Promise<FilesystemValue> {
@@ -126,8 +130,19 @@ async function readMemory(): Promise<Reading<MemoryValue>> {
         availableBytes: Number(availableMatch[1]) * 1024,
       },
     };
-  } catch (error) {
-    return unavailable(error);
+  } catch {
+    const total = totalmem();
+    const free = freemem();
+    if (total > 0) {
+      return {
+        state: "available",
+        value: {
+          totalBytes: total,
+          availableBytes: free,
+        },
+      };
+    }
+    return unavailable(new Error("Memory reading unavailable"));
   }
 }
 

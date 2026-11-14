@@ -2,7 +2,7 @@ import "server-only";
 
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 export const OWNER_SESSION_COOKIE = "harvy_dashboard_owner";
 
@@ -30,13 +30,10 @@ export function verifyOwnerToken(candidate: string) {
 }
 
 function safeEqual(left: string, right: string) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
+  const leftHash = createHash("sha256").update(left).digest();
+  const rightHash = createHash("sha256").update(right).digest();
 
-  return (
-    leftBuffer.length === rightBuffer.length &&
-    timingSafeEqual(leftBuffer, rightBuffer)
-  );
+  return timingSafeEqual(leftHash, rightHash);
 }
 
 export function getOwnerSessionValue() {
@@ -102,7 +99,7 @@ export function setSessionToken(token: string, request: NextRequest): NextRespon
   return response;
 }
 
-export function removeSessionToken(request: NextRequest): NextResponse {
+export function removeSessionToken(_request?: NextRequest): NextResponse {
   const response = NextResponse.next();
   response.cookies.set({
     name: OWNER_SESSION_COOKIE,

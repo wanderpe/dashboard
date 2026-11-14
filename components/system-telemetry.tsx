@@ -19,6 +19,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import type {
   EndpointCheck,
   FilesystemValue,
@@ -133,9 +134,10 @@ function Metric({
         {label}
       </div>
       <p
-        className={`mt-3 text-lg font-medium tracking-tight ${
+        className={cn(
+          "mt-3 text-lg font-medium tracking-tight",
           unavailable ? "text-amber-200" : "text-[#f2fdff]"
-        }`}
+        )}
       >
         {value}
       </p>
@@ -158,11 +160,12 @@ function ReachabilityCheck({ check }: { check: EndpointCheck }) {
         </div>
         <Badge
           variant="outline"
-          className={`rounded-sm font-mono text-[10px] tracking-[0.12em] uppercase ${
+          className={cn(
+            "rounded-sm font-mono text-[10px] tracking-[0.12em] uppercase",
             reachable
               ? "border-cyan-200/25 bg-cyan-300/[0.06] text-cyan-100"
               : "border-amber-200/25 bg-amber-300/[0.06] text-amber-100"
-          }`}
+          )}
         >
           {reachable ? "Reachable" : "Unreachable"}
         </Badge>

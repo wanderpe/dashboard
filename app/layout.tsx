@@ -20,7 +20,11 @@ export const metadata: Metadata = {
   description: "Private control interface for Harvy's home lab services.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html
       lang="en"

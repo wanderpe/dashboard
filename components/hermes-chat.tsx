@@ -36,27 +36,19 @@ type ChatMessage = {
 };
 
 function generateUUID(): string {
-  if (typeof crypto !== "undefined" && typeof (crypto as Crypto).randomUUID === "function") {
-    return (crypto as Crypto).randomUUID();
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
   }
-  if (typeof crypto !== "undefined" && typeof (crypto as Crypto).getRandomValues === "function") {
-    const bytes = new Uint8Array(16);
-    (crypto as Crypto).getRandomValues(bytes);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-    return `${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}`;
-  }
-  const fallback = new Uint8Array(16);
-  if (typeof self !== "undefined" && typeof (self as unknown as { msCrypto?: Crypto }).msCrypto?.getRandomValues === "function") {
-    (self as unknown as { msCrypto: Crypto }).msCrypto.getRandomValues(fallback);
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    crypto.getRandomValues(bytes);
   } else {
-    for (let i = 0; i < 16; i++) fallback[i] = Math.floor(Math.random() * 256);
+    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
   }
-  fallback[6] = (fallback[6] & 0x0f) | 0x40;
-  fallback[8] = (fallback[8] & 0x3f) | 0x80;
-  const hex = Array.from(fallback).map((b) => b.toString(16).padStart(2, "0")).join("");
-  return `${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}`;
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 type SessionState = {

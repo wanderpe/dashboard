@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { verifySession } from "@/lib/dashboard-auth";
 
@@ -77,7 +78,7 @@ function createSseFrame(data: unknown) {
 
 function createMockStream() {
   const encoder = new TextEncoder();
-  const completionId = `chatcmpl-mock-${generateUUID()}`;
+  const completionId = `chatcmpl-mock-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   const chunks = [
     "Mock stream connected. ",
@@ -154,29 +155,6 @@ function createMockStream() {
   });
 }
 
-function generateUUID(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
-    const bytes = new Uint8Array(16);
-    crypto.getRandomValues(bytes);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-    return hex.substring(0, 8) + "-" + hex.substring(8, 12) + "-" + hex.substring(12, 16) + "-" + hex.substring(16, 20) + "-" + hex.substring(20);
-  }
-  const fallback = new Uint8Array(16);
-  if (typeof self !== "undefined" && typeof (self as unknown as { msCrypto?: Crypto }).msCrypto?.getRandomValues === "function") {
-    (self as unknown as { msCrypto: Crypto }).msCrypto.getRandomValues(fallback);
-  } else {
-    for (let i = 0; i < 16; i++) fallback[i] = Math.floor(Math.random() * 256);
-  }
-  fallback[6] = (fallback[6] & 0x0f) | 0x40;
-  fallback[8] = (fallback[8] & 0x3f) | 0x80;
-  const hex = Array.from(fallback).map((b) => b.toString(16).padStart(2, "0")).join("");
-  return hex.substring(0, 8) + "-" + hex.substring(8, 12) + "-" + hex.substring(12, 16) + "-" + hex.substring(16, 20) + "-" + hex.substring(20);
-}
 async function getUpstreamError(response: Response) {
   const fallback = `Hermes returned HTTP ${response.status}.`;
 
