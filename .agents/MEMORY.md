@@ -31,3 +31,4 @@
 | :--- | :--- | :--- | :--- | :--- |
 | 2026-11-15 | BOOTSTRAP | `init/agent-os` | Master Agent bootstrap of Agent OS v2.0 | [`.agents/`](file:///d:/homelab-dashboard/homelab-dashboard/.agents/) |
 | 2026-11-15 | HOTFIX | `hotfix/codebase-bad-practices` | Refactored bad practices, timingSafeEqual security leak, UUID duplication, and non-Linux fallbacks | [RELEASE_NOTES.md](file:///d:/homelab-dashboard/homelab-dashboard/.agent-work/hotfix/codebase-bad-practices/RELEASE_NOTES.md) |
+| 2026-11-15 | FEATURE | `feat/premium-ui-ux-upgrade` | Overhauled dashboard to obsidian tactile command center, visual gauges, and Emil Kowalski physics | [RELEASE_NOTES.md](file:///d:/homelab-dashboard/homelab-dashboard/.agent-work/feat/premium-ui-ux-upgrade/RELEASE_NOTES.md) |
