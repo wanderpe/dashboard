@@ -14,13 +14,7 @@ import {
   UserRound,
   Wrench,
 } from "lucide-react";
-import {
-  FormEvent,
-  KeyboardEvent,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,18 +30,26 @@ type ChatMessage = {
 };
 
 function generateUUID(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
     return crypto.randomUUID();
   }
   const bytes = new Uint8Array(16);
-  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.getRandomValues === "function"
+  ) {
     crypto.getRandomValues(bytes);
   } else {
     for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
   }
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(
+    "",
+  );
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
@@ -166,7 +168,8 @@ function modeCopy(mode: ChatMode) {
     case "mock":
       return {
         label: "Mock mode",
-        description: "Streaming UI verification is using the local mock response.",
+        description:
+          "Streaming UI verification is using the local mock response.",
         className: "border-amber-300/30 bg-amber-300/10 text-amber-100",
       };
     default:
@@ -201,7 +204,9 @@ export function HermesChat() {
 
     async function loadSession() {
       try {
-        const response = await fetch("/api/auth/session", { cache: "no-store" });
+        const response = await fetch("/api/auth/session", {
+          cache: "no-store",
+        });
         if (!response.ok) {
           throw new Error("Could not check owner access.");
         }
@@ -213,7 +218,9 @@ export function HermesChat() {
       } catch (error) {
         if (active) {
           setSessionError(
-            error instanceof Error ? error.message : "Could not check owner access.",
+            error instanceof Error
+              ? error.message
+              : "Could not check owner access.",
           );
         }
       }
@@ -401,7 +408,12 @@ export function HermesChat() {
 
       if (!response.ok) {
         const value: unknown = await response.json().catch(() => null);
-        throw new Error(getErrorMessage(value, `Chat request failed with HTTP ${response.status}.`));
+        throw new Error(
+          getErrorMessage(
+            value,
+            `Chat request failed with HTTP ${response.status}.`,
+          ),
+        );
       }
 
       if (!response.body) {
@@ -432,9 +444,13 @@ export function HermesChat() {
         }
 
         if (frame.event === "hermes.tool.progress") {
-          const label = typeof payload.label === "string" ? payload.label : "Using a tool";
-          const status = typeof payload.status === "string" ? payload.status : "";
-          setActivity(status === "completed" ? "Processing tool result…" : label);
+          const label =
+            typeof payload.label === "string" ? payload.label : "Using a tool";
+          const status =
+            typeof payload.status === "string" ? payload.status : "";
+          setActivity(
+            status === "completed" ? "Processing tool result…" : label,
+          );
           return;
         }
 
@@ -510,7 +526,8 @@ export function HermesChat() {
       }
 
       setChatError({
-        message: error instanceof Error ? error.message : "The Hermes request failed.",
+        message:
+          error instanceof Error ? error.message : "The Hermes request failed.",
         retry: { content, requestId },
       });
     } finally {
@@ -541,7 +558,10 @@ export function HermesChat() {
         className="ambient-canvas flex min-h-[calc(100svh-61px)] items-center justify-center px-4 lg:min-h-svh"
       >
         <div className="flex items-center gap-3 font-mono text-xs tracking-wider text-cyan-300 uppercase">
-          <LoaderCircle className="size-4 animate-spin text-cyan-400" aria-hidden="true" />
+          <LoaderCircle
+            className="size-4 animate-spin text-cyan-400"
+            aria-hidden="true"
+          />
           Connecting to Hermes Assistant...
         </div>
       </main>
@@ -556,8 +576,12 @@ export function HermesChat() {
       >
         <div className="glass-panel w-full max-w-lg rounded-2xl border-rose-500/30 p-8 text-rose-50 shadow-2xl">
           <CircleAlert className="size-6 text-rose-400" aria-hidden="true" />
-          <h1 className="mt-4 text-xl font-semibold tracking-tight text-white">Owner Access Check Failed</h1>
-          <p className="mt-2 text-sm leading-relaxed text-zinc-300">{sessionError}</p>
+          <h1 className="mt-4 text-xl font-semibold tracking-tight text-white">
+            Owner Access Check Failed
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-zinc-300">
+            {sessionError}
+          </p>
           <Button
             type="button"
             variant="outline"
@@ -589,8 +613,11 @@ export function HermesChat() {
             Owner Access Is Not Configured
           </h1>
           <p className="mt-3 text-sm leading-relaxed text-zinc-300">
-            Set a private <code className="font-mono text-cyan-300 px-1 py-0.5 rounded bg-white/5 border border-white/10">DASHBOARD_OWNER_TOKEN</code> in
-            your server environment, then restart the dashboard container.
+            Set a private{" "}
+            <code className="font-mono text-cyan-300 px-1 py-0.5 rounded bg-white/5 border border-white/10">
+              DASHBOARD_OWNER_TOKEN
+            </code>{" "}
+            in your server environment, then restart the dashboard container.
           </p>
         </section>
       </main>
@@ -614,7 +641,8 @@ export function HermesChat() {
             Unlock Hermes Assistant
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-            Enter the private dashboard owner token to establish a secured session cookie.
+            Enter the private dashboard owner token to establish a secured
+            session cookie.
           </p>
 
           <form className="mt-6" onSubmit={authenticate}>
@@ -636,7 +664,10 @@ export function HermesChat() {
               placeholder="Paste owner token (min 24 characters)"
             />
             {authError ? (
-              <p role="alert" className="mt-3 text-xs leading-relaxed text-rose-400">
+              <p
+                role="alert"
+                className="mt-3 text-xs leading-relaxed text-rose-400"
+              >
                 {authError}
               </p>
             ) : null}
@@ -646,9 +677,17 @@ export function HermesChat() {
               disabled={authenticating || ownerToken.length < 24}
             >
               {authenticating ? (
-                <LoaderCircle className="animate-spin size-4" data-icon="inline-start" aria-hidden="true" />
+                <LoaderCircle
+                  className="animate-spin size-4"
+                  data-icon="inline-start"
+                  aria-hidden="true"
+                />
               ) : (
-                <LockKeyhole className="size-4" data-icon="inline-start" aria-hidden="true" />
+                <LockKeyhole
+                  className="size-4"
+                  data-icon="inline-start"
+                  aria-hidden="true"
+                />
               )}
               {authenticating ? "Authenticating..." : "Unlock Assistant"}
             </Button>
@@ -677,7 +716,13 @@ export function HermesChat() {
               <h1 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
                 Hermes Assistant
               </h1>
-              <Badge variant="outline" className={cn("rounded-md text-[10px] font-mono", mode.className)}>
+              <Badge
+                variant="outline"
+                className={cn(
+                  "rounded-md text-[10px] font-mono",
+                  mode.className,
+                )}
+              >
                 {mode.label}
               </Badge>
             </div>
@@ -691,7 +736,11 @@ export function HermesChat() {
               className="tactile-button rounded-xl border-white/10 bg-white/[0.04] text-zinc-200 hover:bg-white/[0.08] hover:text-white text-xs"
               onClick={startNewConversation}
             >
-              <Plus className="size-3.5" data-icon="inline-start" aria-hidden="true" />
+              <Plus
+                className="size-3.5"
+                data-icon="inline-start"
+                aria-hidden="true"
+              />
               New Conversation
             </Button>
             <Button
@@ -700,7 +749,11 @@ export function HermesChat() {
               className="tactile-button rounded-xl text-zinc-400 hover:bg-white/[0.06] hover:text-white text-xs"
               onClick={() => void signOut()}
             >
-              <LogOut className="size-3.5" data-icon="inline-start" aria-hidden="true" />
+              <LogOut
+                className="size-3.5"
+                data-icon="inline-start"
+                aria-hidden="true"
+              />
               Sign Out
             </Button>
           </div>
@@ -727,8 +780,9 @@ export function HermesChat() {
                 How can Hermes assist your home lab?
               </h2>
               <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-zinc-400">
-                Hermes has direct diagnostic access to the local agent tools. Query container states,
-                system resources, or request infrastructure troubleshooting.
+                Hermes has direct diagnostic access to the local agent tools.
+                Query container states, system resources, or request
+                infrastructure troubleshooting.
               </p>
             </div>
           ) : (
@@ -737,7 +791,7 @@ export function HermesChat() {
                 key={message.id}
                 className={cn(
                   "flex gap-3",
-                  message.role === "user" ? "justify-end" : "justify-start"
+                  message.role === "user" ? "justify-end" : "justify-start",
                 )}
               >
                 {message.role === "assistant" ? (
@@ -751,7 +805,7 @@ export function HermesChat() {
                     "min-w-0 max-w-2xl rounded-2xl p-4 sm:p-5 shadow-sm text-sm leading-relaxed",
                     message.role === "user"
                       ? "border border-cyan-500/20 bg-cyan-500/10 text-white"
-                      : "glass-card-static border-white/[0.08] text-zinc-200"
+                      : "glass-card-static border-white/[0.08] text-zinc-200",
                   )}
                 >
                   <p className="mb-1.5 font-mono text-[10px] font-medium tracking-wider text-zinc-400 uppercase">
@@ -763,7 +817,10 @@ export function HermesChat() {
                     </div>
                   ) : (
                     <div className="flex items-center gap-2 text-xs text-cyan-300">
-                      <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+                      <LoaderCircle
+                        className="size-3.5 animate-spin"
+                        aria-hidden="true"
+                      />
                       Generating response...
                     </div>
                   )}
@@ -791,7 +848,10 @@ export function HermesChat() {
               className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-rose-200"
             >
               <div className="flex items-start gap-3">
-                <CircleAlert className="mt-0.5 size-4 shrink-0 text-rose-300" aria-hidden="true" />
+                <CircleAlert
+                  className="mt-0.5 size-4 shrink-0 text-rose-300"
+                  aria-hidden="true"
+                />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm leading-relaxed">{chatError.message}</p>
                   {chatError.retry ? (
@@ -848,9 +908,17 @@ export function HermesChat() {
               disabled={composerDisabled || !composer.trim()}
             >
               {streaming ? (
-                <LoaderCircle className="animate-spin size-3.5" data-icon="inline-start" aria-hidden="true" />
+                <LoaderCircle
+                  className="animate-spin size-3.5"
+                  data-icon="inline-start"
+                  aria-hidden="true"
+                />
               ) : (
-                <Send className="size-3.5" data-icon="inline-start" aria-hidden="true" />
+                <Send
+                  className="size-3.5"
+                  data-icon="inline-start"
+                  aria-hidden="true"
+                />
               )}
               {streaming ? "Thinking..." : "Send"}
             </Button>

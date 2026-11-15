@@ -1,0 +1,24 @@
+{
+    "task_id": "hotfix/codebase-bad-practices",
+    "workflow_type": "HOTFIX",
+    "complexity": "SMALL",
+    "current_node": "node_completed",
+    "status": "SUCCESS",
+    "review_cycles": 1,
+    "qa_cycles": 1,
+    "artifacts": {
+        "hotfix_context": "D:/homelab-dashboard/homelab-dashboard/.agent-work/hotfix/codebase-bad-practices/HOTFIX_CONTEXT.md",
+        "hotfix_plan": "D:/homelab-dashboard/homelab-dashboard/.agent-work/hotfix/codebase-bad-practices/HOTFIX_PLAN.md",
+        "hotfix_report": "D:/homelab-dashboard/homelab-dashboard/.agent-work/hotfix/codebase-bad-practices/HOTFIX_REPORT.md",
+        "code_review": "D:/homelab-dashboard/homelab-dashboard/.agent-work/hotfix/codebase-bad-practices/CODE_REVIEW.md",
+        "qa_report": "D:/homelab-dashboard/homelab-dashboard/.agent-work/hotfix/codebase-bad-practices/QA_REPORT.md"
+    },
+    "gate_checkpoints": {
+        "gate_0_scope": "PENDING",
+        "gate_1_architecture": "PENDING",
+        "gate_6_final_verdict": "PENDING"
+    },
+    "updated_at": "2026-11-14T22:21:00Z",
+    "last_review_verdict": "PASS",
+    "last_qa_verdict": "PASS"
+}
