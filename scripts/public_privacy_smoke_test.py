@@ -49,8 +49,8 @@ def main():
     assert status == 200, f"homepage returned HTTP {status}"
     lowered = page.lower()
     assert not any(marker in lowered for marker in FORBIDDEN_MARKERS), "homepage contains private infrastructure details"
-    assert "What are you working on?" in page, "overview action panel is missing"
-    for prompt_label in ("Explain a concept", "Interpret an error", "Plan a project", "No host tools"):
+    assert "What do you need help with?" in page, "overview action panel is missing"
+    for prompt_label in ("Explain a concept", "Interpret an error", "Plan a project", "A note on privacy"):
         assert prompt_label in page, f"overview is missing {prompt_label!r}"
     assert page.count("/chat?q=") >= 3, "quick-start prompts should link to prefilled chat"
 
