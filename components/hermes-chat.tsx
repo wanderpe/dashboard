@@ -1,11 +1,7 @@
 "use client";
 
 import {
-  ArrowUpRight,
-  Blocks,
-  Bug,
   CircleAlert,
-  Lightbulb,
   LoaderCircle,
   LockKeyhole,
   LogOut,
@@ -13,7 +9,6 @@ import {
   Plus,
   RotateCcw,
   Send,
-  Sparkles,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { signIn as authSignIn, signOut as authSignOut } from "next-auth/react";
@@ -872,66 +867,42 @@ export function HermesChat() {
               <MessageScrollerContent className="mx-auto w-full max-w-5xl gap-6 px-4 py-7 sm:px-6 sm:py-8 lg:px-8">
                 {messages.length === 0 ? (
                   <MessageScrollerItem className="my-auto w-full">
-                    <div className="mx-auto w-full max-w-4xl py-3 sm:py-10">
-                      <div className="relative mx-auto flex size-16 items-center justify-center rounded-[1.4rem] border border-[#d3dfe2] bg-gradient-to-br from-white via-[#fffaf8] to-[#f4e6df] p-2 shadow-[0_12px_28px_-18px_rgba(32,54,66,0.35)] sm:size-[4.5rem]">
-                        <CartmanAvatar className="size-full rounded-xl object-contain" />
-                        <span className="absolute -right-2 -bottom-2 flex size-8 items-center justify-center rounded-full bg-[#ad342d] text-white ring-4 ring-[#eef3f5]">
-                          <Sparkles className="size-4" aria-hidden="true" />
-                        </span>
-                      </div>
-
-                      <div className="mt-3 text-center sm:mt-5">
-                        <span className="inline-flex items-center gap-2 rounded-full border border-[#e7d5c9] bg-[#fffaf6] px-3 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-[#855246]">
-                          <span className="size-1.5 rounded-full bg-[#ad342d]" aria-hidden="true" />
-                          CARTMAN AI · READY TO HELP
-                        </span>
-                        <h2 className="mt-3 font-heading text-3xl font-bold leading-tight tracking-tight text-[#20313a] sm:mt-4 sm:text-4xl">
+                    <div className="w-full py-3 sm:py-10">
+                      <div className="max-w-3xl">
+                        <h2 className="font-heading text-2xl font-bold leading-tight tracking-tight text-[#20313a] sm:text-3xl">
                           What are we working on?
                         </h2>
-                        <p className="mx-auto mt-2 max-w-xl text-base leading-7 text-[#53656d] sm:mt-3">
+                        <p className="mt-2 max-w-3xl text-sm leading-6 text-[#53656d] sm:text-base sm:leading-7">
                           Ask a question, untangle an error, or plan a project. Eric only sees what you share in this chat.
                         </p>
                       </div>
 
-                      <section className="mt-6 sm:mt-8" aria-label="Suggested prompts">
-                        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                      <section className="mt-5 sm:mt-6" aria-label="Suggested prompts">
+                        <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
                           <h3 className="text-sm font-semibold text-[#283b44]">Choose a starting point</h3>
                           <p className="text-xs text-[#718087]">Select one to prefill</p>
                         </div>
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                          {CHAT_SUGGESTIONS.map((suggestion) => {
-                            const Icon = suggestion.id === "explain-concept"
-                              ? Lightbulb
-                              : suggestion.id === "interpret-error"
-                                ? Bug
-                                : Blocks;
-
-                            return (
-                              <Button
-                                key={suggestion.id}
-                                type="button"
-                                variant="outline"
-                                className="group h-full min-h-32 w-full flex-col items-start justify-between whitespace-normal rounded-xl border-[#d2dde0] bg-white p-3 text-left shadow-[0_2px_8px_rgba(29,48,57,0.04)] transition-[translate,box-shadow,border-color] hover:-translate-y-0.5 hover:border-[#bcaaa3] hover:shadow-[0_12px_24px_-18px_rgba(32,54,66,0.22)] focus-visible:ring-2 focus-visible:ring-[#ad342d]/30 sm:p-4"
-                                onClick={() => selectSuggestion(suggestion.id)}
-                                disabled={composerDisabled}
-                                aria-label={`Use prompt: ${suggestion.label}`}
-                              >
-                                <span className="flex w-full items-center justify-between">
-                                  <span className="flex size-10 items-center justify-center rounded-lg bg-[#f8eeeb] text-[#a6322c]">
-                                    <Icon className="size-5" aria-hidden="true" />
-                                  </span>
-                                  <ArrowUpRight className="size-4 text-[#91a1a7] transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-[#a6322c]" aria-hidden="true" />
-                                </span>
-                                <span className="mt-3 block w-full whitespace-normal text-left sm:mt-4">
-                                  <span className="block text-sm font-semibold text-[#263943]">{suggestion.label}</span>
-                                  <span className="mt-1 block text-xs font-normal leading-5 text-[#63727a]">{suggestion.prompt}</span>
-                                </span>
-                              </Button>
-                            );
-                          })}
+                        <div className="flex flex-col gap-1">
+                          {CHAT_SUGGESTIONS.map((suggestion) => (
+                            <Button
+                              key={suggestion.id}
+                              type="button"
+                              variant="ghost"
+                              className="h-auto min-h-11 w-full flex-col items-start justify-center gap-0 whitespace-normal rounded-md border border-transparent px-3 py-2 text-left text-[#263943] shadow-none transition-[translate,box-shadow,border-color,background-color] motion-safe:hover:-translate-y-0.5 hover:border-[#bcaaa3] hover:bg-[#f6f8f9] hover:text-[#20313a] hover:shadow-[0_12px_24px_-18px_rgba(32,54,66,0.22)] focus-visible:ring-2 focus-visible:ring-[#ad342d]/30"
+                              onClick={() => selectSuggestion(suggestion.id)}
+                              disabled={composerDisabled}
+                              aria-label={`Use prompt: ${suggestion.label}`}
+                            >
+                              <span className="block w-full text-sm font-semibold text-[#263943]">
+                                {suggestion.label}
+                              </span>
+                              <span className="mt-1 block w-full text-xs font-normal leading-5 text-[#63727a]">
+                                {suggestion.prompt}
+                              </span>
+                            </Button>
+                          ))}
                         </div>
-                        <p className="mt-3 flex items-center gap-2 text-xs text-[#718087]">
-                          <Sparkles className="size-3.5 text-[#a6322c]" aria-hidden="true" />
+                        <p className="mt-3 text-xs text-[#718087]">
                           Prompts fill the composer. Nothing sends until you choose Send.
                         </p>
                       </section>
