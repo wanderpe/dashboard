@@ -1,9 +1,11 @@
 "use client";
 
 import {
-  Bot,
+  ArrowUpRight,
+  Blocks,
+  Bug,
   CircleAlert,
-  KeyRound,
+  Lightbulb,
   LoaderCircle,
   LockKeyhole,
   LogOut,
@@ -11,16 +13,38 @@ import {
   Plus,
   RotateCcw,
   Send,
-  UserRound,
-  Wrench,
+  Sparkles,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import { signIn as authSignIn, signOut as authSignOut } from "next-auth/react";
 
+import { CartmanAvatar } from "@/components/cartman-avatar";
+import { AIChatMessage } from "@/components/ai-elements/chat-message";
+import { TaskPlanTrace } from "@/components/ai-elements/plan";
+import { TaskQueueTrace } from "@/components/ai-elements/queue";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { InputGroup, InputGroupTextarea } from "@/components/ui/input-group";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "@/components/ui/message-scroller";
+import { CHAT_SUGGESTIONS, getChatSuggestionPrompt } from "@/lib/chat-suggestions.mjs";
+import {
+  normalizeTodoSnapshot,
+  normalizeToolProgress,
+  upsertTodoSnapshot,
+  upsertToolProgressForMessage,
+} from "@/lib/tool-progress.mjs";
+import type { TodoSnapshot, ToolProgressStep } from "@/lib/tool-progress.mjs";
 import { cn } from "@/lib/utils";
 
 type ChatMode = "live" | "mock" | "unconfigured";
+type AuthMode = "signin" | "register";
 type ChatRole = "user" | "assistant";
 
 type ChatMessage = {
@@ -55,8 +79,13 @@ function generateUUID(): string {
 
 type SessionState = {
   authenticated: boolean;
-  configured: boolean;
+  configured?: boolean;
   chatMode: ChatMode;
+  userId?: string | null;
+  profile?: {
+    displayName: string | null;
+    username: string | null;
+  } | null;
 };
 
 type RetryState = {
@@ -84,6 +113,10 @@ type StreamChunk = {
   };
   label?: unknown;
   status?: unknown;
+  tool?: unknown;
+  tool_name?: unknown;
+  toolCallId?: unknown;
+  tool_call_id?: unknown;
 };
 
 const SESSION_ID_KEY = "harvy-hermes-session-id";
@@ -161,22 +194,21 @@ function modeCopy(mode: ChatMode) {
   switch (mode) {
     case "live":
       return {
-        label: "API configured",
-        description: "Replies are forwarded to the local Hermes API.",
-        className: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
+        label: "Available",
+        description: "Ask a question or paste an error.",
+        className: "border-[#c8ddd2] bg-[#edf5f0] text-[#31634f]",
       };
     case "mock":
       return {
-        label: "Mock mode",
-        description:
-          "Streaming UI verification is using the local mock response.",
-        className: "border-amber-300/30 bg-amber-300/10 text-amber-100",
+        label: "Preview",
+        description: "Replies are samples in preview mode.",
+        className: "border-[#ead9a7] bg-[#faf4df] text-[#755d20]",
       };
     default:
       return {
-        label: "API not configured",
-        description: "Add HERMES_API_KEY to the dashboard server environment.",
-        className: "border-rose-300/30 bg-rose-300/10 text-rose-100",
+        label: "Unavailable",
+        description: "Chat is temporarily unavailable. Try again later.",
+        className: "border-[#e9c9c7] bg-[#fbefee] text-[#8a3832]",
       };
   }
 }
@@ -184,20 +216,28 @@ function modeCopy(mode: ChatMode) {
 export function HermesChat() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [sessionError, setSessionError] = useState("");
-  const [ownerToken, setOwnerToken] = useState("");
+  const [authMode, setAuthMode] = useState<AuthMode>("register");
+  const [authName, setAuthName] = useState("");
+  const [authUsername, setAuthUsername] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authenticating, setAuthenticating] = useState(false);
   const [conversationId, setConversationId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [composer, setComposer] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [activity, setActivity] = useState("");
+  const [activeAssistantMessageId, setActiveAssistantMessageId] =
+    useState<string | null>(null);
+  const [toolStepsByMessageId, setToolStepsByMessageId] = useState<
+    Map<string, ToolProgressStep[]>
+  >(() => new Map());
+  const [todoSnapshot, setTodoSnapshot] = useState<TodoSnapshot | null>(null);
   const [chatError, setChatError] = useState<ChatError | null>(null);
   const [storageReady, setStorageReady] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -208,7 +248,7 @@ export function HermesChat() {
           cache: "no-store",
         });
         if (!response.ok) {
-          throw new Error("Could not check owner access.");
+          throw new Error("Could not check authentication.");
         }
 
         const value = (await response.json()) as SessionState;
@@ -218,9 +258,7 @@ export function HermesChat() {
       } catch (error) {
         if (active) {
           setSessionError(
-            error instanceof Error
-              ? error.message
-              : "Could not check owner access.",
+            error instanceof Error ? error.message : "Could not check authentication.",
           );
         }
       }
@@ -268,40 +306,55 @@ export function HermesChat() {
     );
   }, [messages, storageReady]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: "end" });
-  }, [messages, activity]);
-
-  useEffect(() => {
-    if (session?.authenticated) {
-      textareaRef.current?.focus();
-    }
-  }, [session?.authenticated]);
-
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setAuthenticating(true);
     setAuthError("");
 
-    try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ownerToken }),
-      });
-      const value: unknown = await response.json().catch(() => null);
+    const registering = authMode === "register";
+    const payload = registering
+      ? { name: authName, username: authUsername, email: authEmail, password: authPassword }
+      : null;
 
-      if (!response.ok) {
-        throw new Error(getErrorMessage(value, "Owner authentication failed."));
+    try {
+      if (registering) {
+        const response = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const value: unknown = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(getErrorMessage(value, "Account creation failed."));
+        }
       }
 
-      setOwnerToken("");
-      setSession((current) =>
-        current ? { ...current, authenticated: true } : current,
-      );
+      const result = await authSignIn("credentials", {
+        email: authEmail,
+        password: authPassword,
+        redirect: false,
+      });
+      if (!result.ok) {
+        throw new Error(registering ? "Account created, but automatic sign-in failed. Please sign in." : "Email or password is incorrect.");
+      }
+
+      const sessionResponse = await fetch("/api/auth/session", { cache: "no-store" });
+      const value: SessionState = await sessionResponse.json();
+      if (!sessionResponse.ok || !value.authenticated) {
+        throw new Error("Sign-in succeeded, but the dashboard session could not be verified.");
+      }
+
+      setAuthPassword("");
+      sessionStorage.removeItem(MESSAGE_HISTORY_KEY);
+      setMessages([]);
+      setSession(value);
     } catch (error) {
       setAuthError(
-        error instanceof Error ? error.message : "Owner authentication failed.",
+        error instanceof Error
+          ? error.message
+          : authMode === "register"
+            ? "Account creation failed."
+            : "Sign-in failed.",
       );
     } finally {
       setAuthenticating(false);
@@ -311,12 +364,17 @@ export function HermesChat() {
   async function signOut() {
     abortControllerRef.current?.abort();
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
+    await authSignOut({ redirect: false });
     setSession((current) =>
       current ? { ...current, authenticated: false } : current,
     );
     setAuthError("");
+    sessionStorage.removeItem(MESSAGE_HISTORY_KEY);
+    setMessages([]);
     setChatError(null);
-    setActivity("");
+    setToolStepsByMessageId(new Map());
+    setActiveAssistantMessageId(null);
+    setTodoSnapshot(null);
     setStreaming(false);
   }
 
@@ -329,7 +387,9 @@ export function HermesChat() {
     setMessages([]);
     setComposer("");
     setChatError(null);
-    setActivity("");
+    setToolStepsByMessageId(new Map());
+    setActiveAssistantMessageId(null);
+    setTodoSnapshot(null);
     setStreaming(false);
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
@@ -346,11 +406,19 @@ export function HermesChat() {
     setMessages((current) =>
       current.filter((message) => message.id !== messageId),
     );
+    setToolStepsByMessageId((current) => {
+      const next = new Map(current);
+      next.delete(messageId);
+      return next;
+    });
   }
 
   async function sendMessage(
     rawContent: string,
-    options: { appendUser?: boolean; requestId?: string } = {},
+    options: {
+      appendUser?: boolean;
+      requestId?: string;
+    } = {},
   ) {
     const content = rawContent.trim();
     const appendUser = options.appendUser ?? true;
@@ -385,7 +453,8 @@ export function HermesChat() {
     ]);
     setComposer("");
     setStreaming(true);
-    setActivity("Connecting to Hermes…");
+    setActiveAssistantMessageId(assistantId);
+    setTodoSnapshot(null);
     setChatError(null);
 
     const controller = new AbortController();
@@ -417,7 +486,7 @@ export function HermesChat() {
       }
 
       if (!response.body) {
-        throw new Error("Hermes opened the request without a response stream.");
+        throw new Error("Eric opened the request without a response stream.");
       }
 
       const reader = response.body.getReader();
@@ -444,13 +513,20 @@ export function HermesChat() {
         }
 
         if (frame.event === "hermes.tool.progress") {
-          const label =
-            typeof payload.label === "string" ? payload.label : "Using a tool";
-          const status =
-            typeof payload.status === "string" ? payload.status : "";
-          setActivity(
-            status === "completed" ? "Processing tool result…" : label,
-          );
+          const progress = normalizeToolProgress(payload);
+          if (progress) {
+            setToolStepsByMessageId((current) =>
+              upsertToolProgressForMessage(current, assistantId, progress),
+            );
+          }
+          return;
+        }
+
+        if (frame.event === "hermes.todo.updated") {
+          const snapshot = normalizeTodoSnapshot(payload);
+          if (snapshot) {
+            setTodoSnapshot((current) => upsertTodoSnapshot(current, snapshot));
+          }
           return;
         }
 
@@ -463,7 +539,6 @@ export function HermesChat() {
         if (typeof delta === "string" && delta) {
           assistantText += delta;
           updateAssistantMessage(assistantId, assistantText);
-          setActivity("Streaming reply…");
         }
 
         if (typeof choice?.finish_reason === "string") {
@@ -475,8 +550,8 @@ export function HermesChat() {
               (typeof payloadError === "string" && payloadError) ||
               (typeof hermesError === "string" && hermesError) ||
               (finishReason === "cancelled"
-                ? "Hermes cancelled the reply."
-                : "Hermes could not complete the reply.");
+                ? "Eric cancelled the reply."
+                : "Eric could not complete the reply.");
           }
         }
       };
@@ -507,13 +582,13 @@ export function HermesChat() {
       }
 
       if (!assistantText.trim()) {
-        throw new Error("Hermes completed the stream without a reply.");
+        throw new Error("Eric completed the stream without a reply.");
       }
 
       if (finishReason === "length") {
         setChatError({
           message:
-            "Hermes reached its iteration or output limit. The partial reply was kept in the conversation.",
+            "Eric reached its iteration or output limit. The partial reply was kept in the conversation.",
         });
       }
     } catch (error) {
@@ -533,9 +608,9 @@ export function HermesChat() {
     } finally {
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
+        setActiveAssistantMessageId(null);
+        setStreaming(false);
       }
-      setActivity("");
-      setStreaming(false);
     }
   }
 
@@ -545,24 +620,39 @@ export function HermesChat() {
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      event.currentTarget.form?.requestSubmit();
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
     }
+
+    event.preventDefault();
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) {
+      return;
+    }
+
+    event.currentTarget.form?.requestSubmit();
+  }
+
+  function selectSuggestion(id: string) {
+    const prompt = getChatSuggestionPrompt(id);
+    if (!prompt) {
+      return;
+    }
+    setComposer(prompt);
+    textareaRef.current?.focus();
   }
 
   if (!session || !storageReady) {
     return (
       <main
         id="main-content"
-        className="ambient-canvas flex min-h-[calc(100svh-61px)] items-center justify-center px-4 lg:min-h-svh"
+        className="ambient-canvas cartman-chat-canvas flex min-h-[calc(100svh-56px)] items-center justify-center px-4 text-[#52636b] lg:min-h-svh"
       >
-        <div className="flex items-center gap-3 font-mono text-xs tracking-wider text-cyan-300 uppercase">
+        <div className="flex items-center gap-3 text-sm text-[#52636b]">
           <LoaderCircle
-            className="size-4 animate-spin text-cyan-400"
+            className="size-4 animate-spin text-[#ad342d]"
             aria-hidden="true"
           />
-          Connecting to Hermes Assistant...
+          Loading your chat…
         </div>
       </main>
     );
@@ -572,124 +662,124 @@ export function HermesChat() {
     return (
       <main
         id="main-content"
-        className="ambient-canvas flex min-h-[calc(100svh-61px)] items-center justify-center px-4 lg:min-h-svh"
+        className="ambient-canvas cartman-chat-canvas flex min-h-[calc(100svh-56px)] items-center justify-center px-4 lg:min-h-svh"
       >
-        <div className="glass-panel w-full max-w-lg rounded-2xl border-rose-500/30 p-8 text-rose-50 shadow-2xl">
-          <CircleAlert className="size-6 text-rose-400" aria-hidden="true" />
-          <h1 className="mt-4 text-xl font-semibold tracking-tight text-white">
-            Owner Access Check Failed
+        <div className="w-full max-w-lg rounded-md border border-[#e5c9c7] bg-white p-7 text-[#20313a]">
+          <CircleAlert className="size-6 text-[#ad342d]" aria-hidden="true" />
+          <h1 className="mt-4 font-heading text-2xl font-bold text-[#20313a]">
+            Couldn’t check your session
           </h1>
-          <p className="mt-2 text-sm leading-relaxed text-zinc-300">
+          <p className="mt-2 text-sm leading-relaxed text-[#5e7078]">
             {sessionError}
           </p>
           <Button
             type="button"
             variant="outline"
-            className="tactile-button mt-6 min-h-10 rounded-xl border-rose-500/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20"
+            className="tactile-button mt-6 min-h-11 rounded-md border-[#cbd7da] bg-white text-[#334b55] hover:bg-[#edf2f4]"
             onClick={() => window.location.reload()}
           >
             <RotateCcw data-icon="inline-start" aria-hidden="true" />
-            Retry Connection
+            Try again
           </Button>
         </div>
       </main>
     );
   }
 
-  if (!session.configured) {
-    return (
-      <main
-        id="main-content"
-        className="ambient-canvas flex min-h-[calc(100svh-61px)] items-center justify-center px-4 py-8 lg:min-h-svh"
-      >
-        <section className="glass-panel w-full max-w-xl rounded-2xl border-amber-500/30 p-8 text-zinc-100 shadow-2xl">
-          <div className="flex size-12 items-center justify-center rounded-xl border border-amber-400/20 bg-amber-400/10 text-amber-300">
-            <KeyRound className="size-6" aria-hidden="true" />
-          </div>
-          <span className="mt-6 inline-block font-mono text-xs font-medium tracking-wider text-amber-400 uppercase">
-            Configuration Required
-          </span>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">
-            Owner Access Is Not Configured
-          </h1>
-          <p className="mt-3 text-sm leading-relaxed text-zinc-300">
-            Set a private{" "}
-            <code className="font-mono text-cyan-300 px-1 py-0.5 rounded bg-white/5 border border-white/10">
-              DASHBOARD_OWNER_TOKEN
-            </code>{" "}
-            in your server environment, then restart the dashboard container.
-          </p>
-        </section>
-      </main>
-    );
-  }
 
   if (!session.authenticated) {
+    const canSubmit = authMode === "register"
+      ? Boolean(authName.trim() && authUsername.trim() && authEmail.trim() && authPassword.length >= 8)
+      : Boolean(authEmail.trim() && authPassword.length >= 8);
+    const title = authMode === "register"
+      ? "Create your chat account"
+      : "Sign in to Eric AI";
+    const description = authMode === "register"
+      ? "Create a private profile for your conversations."
+      : "Sign in to continue with your private chat profile.";
+
     return (
       <main
         id="main-content"
-        className="ambient-canvas flex min-h-[calc(100svh-61px)] items-center justify-center px-4 py-8 lg:min-h-svh"
+        className="ambient-canvas cartman-chat-canvas flex min-h-[calc(100svh-56px)] items-center justify-center px-4 py-8 lg:min-h-svh"
       >
-        <section className="glass-panel w-full max-w-md rounded-2xl border-white/10 p-8 text-zinc-100 shadow-2xl">
-          <div className="flex size-12 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">
+        <section className="w-full max-w-md rounded-md border border-[#d2dde0] bg-white p-6 text-[#20313a] sm:p-8">
+          <div className="flex size-11 items-center justify-center rounded-md border border-[#d2dde0] bg-[#e7eef0] text-[#a6322c]">
             <LockKeyhole className="size-6" aria-hidden="true" />
           </div>
-          <span className="mt-6 inline-block font-mono text-xs font-medium tracking-wider text-cyan-400 uppercase">
-            Private Channel &middot; Owner Authentication
-          </span>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">
-            Unlock Hermes Assistant
-          </h1>
-          <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-            Enter the private dashboard owner token to establish a secured
-            session cookie.
+          <p className="mt-5 text-sm font-medium text-[#65767d]">
+            Eric AI
           </p>
+          <h1 className="mt-1 font-heading text-3xl font-bold tracking-tight text-[#20313a]">
+            {title}
+          </h1>
+          <p className="mt-2 text-sm leading-6 text-[#5f7078]">{description}</p>
 
-          <form className="mt-6" onSubmit={authenticate}>
-            <label
-              htmlFor="owner-token"
-              className="font-mono text-xs font-medium tracking-wider text-zinc-400 uppercase"
+          <div className="mt-6 grid grid-cols-2 gap-1 border-b border-[#d2dde0] bg-[#f3f6f7] p-1" role="tablist" aria-label="Authentication options">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={authMode === "register"}
+              onClick={() => { setAuthMode("register"); setAuthError(""); }}
+              className={cn(
+                "min-h-11 rounded-md px-2 text-sm font-medium transition-colors",
+                authMode === "register" ? "bg-[#203642] text-white" : "text-[#53666e] hover:bg-[#e7eef0] hover:text-[#20313a]",
+              )}
             >
-              Owner Token
-            </label>
-            <input
-              id="owner-token"
-              type="password"
-              value={ownerToken}
-              onChange={(event) => setOwnerToken(event.target.value)}
-              autoComplete="current-password"
-              required
-              minLength={24}
-              className="mt-2 min-h-11 w-full rounded-xl border border-white/10 bg-black/40 px-3.5 text-sm text-white outline-none placeholder:text-zinc-500 focus-ring-glow"
-              placeholder="Paste owner token (min 24 characters)"
-            />
+              Create account
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={authMode === "signin"}
+              onClick={() => { setAuthMode("signin"); setAuthError(""); }}
+              className={cn(
+                "min-h-11 rounded-md px-2 text-sm font-medium",
+                authMode === "signin" ? "bg-[#203642] text-white" : "text-[#53666e] hover:bg-[#e7eef0] hover:text-[#20313a]",
+              )}
+            >
+              Sign in
+            </button>
+
+          </div>
+
+          <form className="mt-5 space-y-4" onSubmit={authenticate}>
+            {authMode === "register" ? (
+              <>
+                <div>
+                  <label htmlFor="auth-name" className="text-sm font-medium text-[#53666e]">Display name</label>
+                  <input id="auth-name" type="text" value={authName} onChange={(event) => setAuthName(event.target.value)} autoComplete="name" required maxLength={80} className="mt-2 min-h-11 w-full rounded-md border border-[#cbd7da] bg-white px-3 text-base text-[#20313a] outline-none placeholder:text-[#829097] focus-visible:border-[#ad342d] focus-visible:ring-2 focus-visible:ring-[#ad342d]/20" placeholder="How should Eric address you?" />
+                </div>
+                <div>
+                  <label htmlFor="auth-username" className="text-sm font-medium text-[#53666e]">Username</label>
+                  <input id="auth-username" type="text" value={authUsername} onChange={(event) => setAuthUsername(event.target.value)} autoComplete="username" required maxLength={40} className="mt-2 min-h-11 w-full rounded-md border border-[#cbd7da] bg-white px-3 text-base text-[#20313a] outline-none placeholder:text-[#829097] focus-visible:border-[#ad342d] focus-visible:ring-2 focus-visible:ring-[#ad342d]/20" placeholder="Choose a username" />
+                </div>
+              </>
+            ) : null}
+
+            {true ? (
+              <>
+                <div>
+                  <label htmlFor="auth-email" className="text-sm font-medium text-[#53666e]">Email</label>
+                  <input id="auth-email" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} autoComplete="email" required className="mt-2 min-h-11 w-full rounded-md border border-[#cbd7da] bg-white px-3 text-base text-[#20313a] outline-none placeholder:text-[#829097] focus-visible:border-[#ad342d] focus-visible:ring-2 focus-visible:ring-[#ad342d]/20" placeholder="you@example.com" />
+                </div>
+                <div>
+                  <label htmlFor="auth-password" className="text-sm font-medium text-[#53666e]">Password</label>
+                  <input id="auth-password" type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} autoComplete={authMode === "register" ? "new-password" : "current-password"} required minLength={8} maxLength={256} className="mt-2 min-h-11 w-full rounded-md border border-[#cbd7da] bg-white px-3 text-base text-[#20313a] outline-none placeholder:text-[#829097] focus-visible:border-[#ad342d] focus-visible:ring-2 focus-visible:ring-[#ad342d]/20" placeholder="At least 8 characters" />
+                </div>
+              </>
+            ) : null}
+
             {authError ? (
-              <p
-                role="alert"
-                className="mt-3 text-xs leading-relaxed text-rose-400"
-              >
-                {authError}
-              </p>
+              <p role="alert" className="rounded-md border border-[#e5c9c7] bg-[#fbefee] px-3 py-2 text-sm leading-6 text-[#7c342f]">{authError}</p>
             ) : null}
             <Button
               type="submit"
-              className="tactile-button focus-ring-glow mt-5 min-h-11 w-full rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 font-semibold text-white shadow-lg shadow-cyan-500/20 hover:from-cyan-400 hover:to-blue-500"
-              disabled={authenticating || ownerToken.length < 24}
+              className="min-h-11 w-full rounded-md bg-[#ad342d] text-white hover:bg-[#922a24] focus-visible:ring-[#ad342d]/40"
+              disabled={authenticating || !canSubmit}
             >
-              {authenticating ? (
-                <LoaderCircle
-                  className="animate-spin size-4"
-                  data-icon="inline-start"
-                  aria-hidden="true"
-                />
-              ) : (
-                <LockKeyhole
-                  className="size-4"
-                  data-icon="inline-start"
-                  aria-hidden="true"
-                />
-              )}
-              {authenticating ? "Authenticating..." : "Unlock Assistant"}
+              {authenticating ? <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden="true" /> : <LockKeyhole data-icon="inline-start" aria-hidden="true" />}
+              {authenticating ? "Please wait…" : authMode === "register" ? "Create account" : "Sign in"}
             </Button>
           </form>
         </section>
@@ -703,37 +793,40 @@ export function HermesChat() {
   return (
     <main
       id="main-content"
-      className="ambient-canvas grid h-[calc(100svh-61px)] min-h-[36rem] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden lg:h-svh text-zinc-100"
+      className="ambient-canvas cartman-chat-canvas grid h-[calc(100svh-56px)] min-h-[36rem] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden text-[#20313a] lg:h-svh"
     >
-      <header className="relative z-10 border-b border-white/[0.08] bg-[#07090e]/85 backdrop-blur-xl px-4 py-4 sm:px-6 lg:px-8">
+      <header className="relative z-10 border-b border-[#d2dde0] bg-[#f8fafb] px-4 py-3 sm:px-6 lg:px-8">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 font-mono text-xs tracking-wider text-cyan-400 uppercase">
-              <MessageSquareText className="size-3.5" aria-hidden="true" />
-              <span>Hermes Agent Channel</span>
+          <div className="flex min-w-0 items-center gap-3">
+            <CartmanAvatar className="size-11 shrink-0 rounded-full border border-[#c4d4d9] bg-[#dce8eb] object-contain" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-xs font-medium text-[#667880]">
+                <MessageSquareText className="size-3.5" aria-hidden="true" />
+                <span>Personal chat</span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-3">
+                <h1 className="font-heading text-2xl font-bold tracking-tight text-[#20313a] sm:text-3xl">
+                  Eric
+                </h1>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "rounded-md text-xs font-medium",
+                    mode.className,
+                  )}
+                >
+                  {mode.label}
+                </Badge>
+              </div>
+              <p className="mt-1 text-sm text-[#64747b]">{mode.description}</p>
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-3">
-              <h1 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
-                Hermes Assistant
-              </h1>
-              <Badge
-                variant="outline"
-                className={cn(
-                  "rounded-md text-[10px] font-mono",
-                  mode.className,
-                )}
-              >
-                {mode.label}
-              </Badge>
-            </div>
-            <p className="mt-1 text-xs text-zinc-400">{mode.description}</p>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               variant="outline"
-              className="tactile-button rounded-xl border-white/10 bg-white/[0.04] text-zinc-200 hover:bg-white/[0.08] hover:text-white text-xs"
+              className="tactile-button min-h-11 rounded-md border-[#cbd7da] bg-white text-[#344a54] hover:bg-[#edf2f4] hover:text-[#20313a] text-sm"
               onClick={startNewConversation}
             >
               <Plus
@@ -741,12 +834,12 @@ export function HermesChat() {
                 data-icon="inline-start"
                 aria-hidden="true"
               />
-              New Conversation
+              New chat
             </Button>
             <Button
               type="button"
               variant="ghost"
-              className="tactile-button rounded-xl text-zinc-400 hover:bg-white/[0.06] hover:text-white text-xs"
+              className="tactile-button min-h-11 rounded-md text-[#5f7078] hover:bg-[#e9eff1] hover:text-[#20313a] text-sm"
               onClick={() => void signOut()}
             >
               <LogOut
@@ -754,139 +847,177 @@ export function HermesChat() {
                 data-icon="inline-start"
                 aria-hidden="true"
               />
-              Sign Out
+              Sign out
             </Button>
           </div>
         </div>
       </header>
 
       <section
-        aria-label="Hermes conversation"
+        aria-label="Eric conversation"
         aria-busy={streaming}
-        className="relative z-10 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8 lg:px-8"
+        className="relative z-10 min-h-0"
       >
-        <div
-          role="log"
-          aria-live="polite"
-          aria-relevant="additions text"
-          className="mx-auto flex w-full max-w-5xl flex-col gap-5"
+        <MessageScrollerProvider
+          autoScroll={messages.length > 0}
+          defaultScrollPosition={messages.length > 0 ? "end" : "start"}
+          scrollPreviousItemPeek={56}
         >
-          {messages.length === 0 ? (
-            <div className="my-auto flex min-h-[18rem] flex-col justify-center rounded-2xl glass-panel p-8 text-center sm:p-10">
-              <div className="mx-auto flex size-12 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">
-                <Bot className="size-6" aria-hidden="true" />
-              </div>
-              <h2 className="mt-4 text-2xl font-semibold tracking-tight text-white">
-                How can Hermes assist your home lab?
-              </h2>
-              <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-zinc-400">
-                Hermes has direct diagnostic access to the local agent tools.
-                Query container states, system resources, or request
-                infrastructure troubleshooting.
-              </p>
-            </div>
-          ) : (
-            messages.map((message) => (
-              <article
-                key={message.id}
-                className={cn(
-                  "flex gap-3",
-                  message.role === "user" ? "justify-end" : "justify-start",
-                )}
-              >
-                {message.role === "assistant" ? (
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-cyan-400/20 bg-cyan-400/10 text-cyan-300 mt-1">
-                    <Bot className="size-4" />
-                  </div>
-                ) : null}
-
-                <div
-                  className={cn(
-                    "min-w-0 max-w-2xl rounded-2xl p-4 sm:p-5 shadow-sm text-sm leading-relaxed",
-                    message.role === "user"
-                      ? "border border-cyan-500/20 bg-cyan-500/10 text-white"
-                      : "glass-card-static border-white/[0.08] text-zinc-200",
-                  )}
-                >
-                  <p className="mb-1.5 font-mono text-[10px] font-medium tracking-wider text-zinc-400 uppercase">
-                    {message.role === "assistant" ? "Hermes Agent" : "Harvy"}
-                  </p>
-                  {message.content ? (
-                    <div className="whitespace-pre-wrap break-words">
-                      {message.content}
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 text-xs text-cyan-300">
-                      <LoaderCircle
-                        className="size-3.5 animate-spin"
-                        aria-hidden="true"
-                      />
-                      Generating response...
-                    </div>
-                  )}
-                </div>
-
-                {message.role === "user" ? (
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] text-zinc-300 mt-1">
-                    <UserRound className="size-4" />
-                  </div>
-                ) : null}
-              </article>
-            ))
-          )}
-
-          {activity ? (
-            <div className="flex items-center gap-2 pl-1 font-mono text-[11px] text-cyan-300">
-              <Wrench className="size-3.5" aria-hidden="true" />
-              <span>{activity}</span>
-            </div>
-          ) : null}
-
-          {chatError ? (
-            <div
-              role="alert"
-              className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-rose-200"
+          <MessageScroller className="h-full">
+            <MessageScrollerViewport
+              aria-label="Conversation messages"
+              aria-busy={streaming}
+              className="px-0"
             >
-              <div className="flex items-start gap-3">
-                <CircleAlert
-                  className="mt-0.5 size-4 shrink-0 text-rose-300"
-                  aria-hidden="true"
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm leading-relaxed">{chatError.message}</p>
-                  {chatError.retry ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="tactile-button mt-3 rounded-lg border-rose-500/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20"
-                      disabled={streaming}
-                      onClick={() =>
-                        void sendMessage(chatError.retry!.content, {
-                          appendUser: false,
-                          requestId: chatError.retry!.requestId,
-                        })
-                      }
+              <MessageScrollerContent className="mx-auto w-full max-w-5xl gap-6 px-4 py-7 sm:px-6 sm:py-8 lg:px-8">
+                {messages.length === 0 ? (
+                  <MessageScrollerItem className="my-auto w-full">
+                    <div className="mx-auto w-full max-w-4xl py-3 sm:py-10">
+                      <div className="relative mx-auto flex size-16 items-center justify-center rounded-[1.4rem] border border-[#d3dfe2] bg-gradient-to-br from-white via-[#fffaf8] to-[#f4e6df] p-2 shadow-[0_12px_28px_-18px_rgba(32,54,66,0.35)] sm:size-[4.5rem]">
+                        <CartmanAvatar className="size-full rounded-xl object-contain" />
+                        <span className="absolute -right-2 -bottom-2 flex size-8 items-center justify-center rounded-full bg-[#ad342d] text-white ring-4 ring-[#eef3f5]">
+                          <Sparkles className="size-4" aria-hidden="true" />
+                        </span>
+                      </div>
+
+                      <div className="mt-3 text-center sm:mt-5">
+                        <span className="inline-flex items-center gap-2 rounded-full border border-[#e7d5c9] bg-[#fffaf6] px-3 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-[#855246]">
+                          <span className="size-1.5 rounded-full bg-[#ad342d]" aria-hidden="true" />
+                          CARTMAN AI · READY TO HELP
+                        </span>
+                        <h2 className="mt-3 font-heading text-3xl font-bold leading-tight tracking-tight text-[#20313a] sm:mt-4 sm:text-4xl">
+                          What are we working on?
+                        </h2>
+                        <p className="mx-auto mt-2 max-w-xl text-base leading-7 text-[#53656d] sm:mt-3">
+                          Ask a question, untangle an error, or plan a project. Eric only sees what you share in this chat.
+                        </p>
+                      </div>
+
+                      <section className="mt-6 sm:mt-8" aria-label="Suggested prompts">
+                        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                          <h3 className="text-sm font-semibold text-[#283b44]">Choose a starting point</h3>
+                          <p className="text-xs text-[#718087]">Select one to prefill</p>
+                        </div>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                          {CHAT_SUGGESTIONS.map((suggestion) => {
+                            const Icon = suggestion.id === "explain-concept"
+                              ? Lightbulb
+                              : suggestion.id === "interpret-error"
+                                ? Bug
+                                : Blocks;
+
+                            return (
+                              <Button
+                                key={suggestion.id}
+                                type="button"
+                                variant="outline"
+                                className="group h-full min-h-32 w-full flex-col items-start justify-between whitespace-normal rounded-xl border-[#d2dde0] bg-white p-3 text-left shadow-[0_2px_8px_rgba(29,48,57,0.04)] transition-[translate,box-shadow,border-color] hover:-translate-y-0.5 hover:border-[#bcaaa3] hover:shadow-[0_12px_24px_-18px_rgba(32,54,66,0.22)] focus-visible:ring-2 focus-visible:ring-[#ad342d]/30 sm:p-4"
+                                onClick={() => selectSuggestion(suggestion.id)}
+                                disabled={composerDisabled}
+                                aria-label={`Use prompt: ${suggestion.label}`}
+                              >
+                                <span className="flex w-full items-center justify-between">
+                                  <span className="flex size-10 items-center justify-center rounded-lg bg-[#f8eeeb] text-[#a6322c]">
+                                    <Icon className="size-5" aria-hidden="true" />
+                                  </span>
+                                  <ArrowUpRight className="size-4 text-[#91a1a7] transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-[#a6322c]" aria-hidden="true" />
+                                </span>
+                                <span className="mt-3 block w-full whitespace-normal text-left sm:mt-4">
+                                  <span className="block text-sm font-semibold text-[#263943]">{suggestion.label}</span>
+                                  <span className="mt-1 block text-xs font-normal leading-5 text-[#63727a]">{suggestion.prompt}</span>
+                                </span>
+                              </Button>
+                            );
+                          })}
+                        </div>
+                        <p className="mt-3 flex items-center gap-2 text-xs text-[#718087]">
+                          <Sparkles className="size-3.5 text-[#a6322c]" aria-hidden="true" />
+                          Prompts fill the composer. Nothing sends until you choose Send.
+                        </p>
+                      </section>
+                    </div>
+                  </MessageScrollerItem>
+                ) : (
+                  messages.map((message) => (
+                    <MessageScrollerItem
+                      key={message.id}
+                      messageId={message.id}
+                      scrollAnchor={message.role === "user"}
+                      className="w-full"
                     >
-                      <RotateCcw data-icon="inline-start" aria-hidden="true" />
-                      Retry Request
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          ) : null}
-          <div ref={messagesEndRef} />
-        </div>
+                      <AIChatMessage
+                        message={message}
+                        userName={session.profile?.displayName ?? "You"}
+                        toolSteps={toolStepsByMessageId.get(message.id) ?? []}
+                        streaming={
+                          streaming && activeAssistantMessageId === message.id
+                        }
+                      />
+                    </MessageScrollerItem>
+                  ))
+                )}
+
+                {todoSnapshot?.todos.length ? (
+                  <MessageScrollerItem className="w-full">
+                    <div className="space-y-3">
+                      <TaskPlanTrace snapshot={todoSnapshot} streaming={streaming} />
+                      <TaskQueueTrace snapshot={todoSnapshot} streaming={streaming} />
+                    </div>
+                  </MessageScrollerItem>
+                ) : null}
+
+                {chatError ? (
+                  <MessageScrollerItem className="w-full">
+                    <div
+                      role="alert"
+                      className="rounded-md border border-[#e5c9c7] bg-[#fbefee] p-4 text-[#7c342f]"
+                    >
+                      <div className="flex items-start gap-3">
+                        <CircleAlert
+                          className="mt-0.5 size-4 shrink-0 text-[#ad342d]"
+                          aria-hidden="true"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm leading-relaxed">{chatError.message}</p>
+                          {chatError.retry ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="tactile-button mt-3 min-h-11 rounded-md border-[#d9b8b5] bg-white text-[#7c342f] hover:bg-[#f8e5e3]"
+                              disabled={streaming}
+                              onClick={() =>
+                                void sendMessage(chatError.retry!.content, {
+                                  appendUser: false,
+                                  requestId: chatError.retry!.requestId,
+                                })
+                              }
+                            >
+                              <RotateCcw data-icon="inline-start" aria-hidden="true" />
+                              Retry Request
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  </MessageScrollerItem>
+                ) : null}
+              </MessageScrollerContent>
+            </MessageScrollerViewport>
+            {messages.length > 0 ? (
+              <MessageScrollerButton className="border-[#cbd7da] bg-white text-[#334b55] shadow-sm hover:bg-[#edf2f4]" />
+            ) : null}
+          </MessageScroller>
+        </MessageScrollerProvider>
       </section>
 
-      <div className="relative z-10 border-t border-white/[0.08] bg-[#07090e]/90 backdrop-blur-xl px-4 py-3 sm:px-6 sm:py-4 lg:px-8">
+      <div className="relative z-10 border-t border-[#d2dde0] bg-[#f8fafb]/95 px-4 py-4 backdrop-blur sm:px-6 lg:px-8">
         <form className="mx-auto w-full max-w-5xl" onSubmit={submitMessage}>
           <label htmlFor="chat-composer" className="sr-only">
-            Message Hermes
+            Message Eric
           </label>
-          <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-black/40 p-2.5 focus-within:border-cyan-400/50 focus-within:ring-2 focus-within:ring-cyan-400/20">
-            <textarea
+          <InputGroup className="h-auto min-h-[4.5rem] items-end gap-3 rounded-2xl border-[#c4d1d6] bg-white p-2.5 shadow-[0_8px_30px_-22px_rgba(32,54,66,0.42)] focus-within:border-[#ad342d] focus-within:ring-4 focus-within:ring-[#ad342d]/10">
+            <InputGroupTextarea
               ref={textareaRef}
               id="chat-composer"
               value={composer}
@@ -897,14 +1028,14 @@ export function HermesChat() {
               disabled={composerDisabled}
               placeholder={
                 session.chatMode === "unconfigured"
-                  ? "Configure the Hermes API key to enable live agent chat"
-                  : "Ask Hermes about home lab status, Docker, or server diagnostics..."
+                  ? "Assistant is temporarily unavailable. Please try again later."
+                  : "Ask Eric anything…"
               }
-              className="max-h-40 min-h-12 w-full resize-none bg-transparent px-2.5 py-1 text-sm leading-relaxed text-white outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed disabled:opacity-55"
+              className="max-h-40 min-h-12 w-full px-2.5 py-1 text-base leading-relaxed text-[#20313a] outline-none placeholder:text-[#829097] disabled:cursor-not-allowed disabled:opacity-55"
             />
             <Button
               type="submit"
-              className="tactile-button focus-ring-glow min-h-10 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-5 text-xs font-semibold text-white shadow-md hover:from-cyan-400 hover:to-blue-500"
+              className="tactile-button focus-ring-glow min-h-11 shrink-0 rounded-xl bg-[#ad342d] px-5 text-sm font-semibold text-white hover:bg-[#922a24] disabled:bg-[#d7e0e2] disabled:text-[#536870] disabled:opacity-100"
               disabled={composerDisabled || !composer.trim()}
             >
               {streaming ? (
@@ -922,10 +1053,12 @@ export function HermesChat() {
               )}
               {streaming ? "Thinking..." : "Send"}
             </Button>
-          </div>
-          <div className="mt-2 flex items-center justify-between font-mono text-[10px] text-zinc-500">
-            <span>Return to send &middot; Shift+Return for newline</span>
-            <span>Secured Browser Session</span>
+          </InputGroup>
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[#718087]">
+            <span>Web search is automatic when useful; search terms may go to external providers. Avoid secrets.</span>
+            <span className="ml-auto">
+              Enter to send · Shift+Enter for a new line
+            </span>
           </div>
         </form>
       </div>

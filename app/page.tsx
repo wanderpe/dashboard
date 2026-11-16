@@ -1,213 +1,175 @@
-import {
-  Boxes,
-  ExternalLink,
-  Gauge,
-  HardDrive,
-  Radio,
-  Server,
-} from "lucide-react";
+import { Suspense } from "react";
+import { connection } from "next/server";
+import Link from "next/link";
+import { ArrowUpRight, ShieldCheck } from "lucide-react";
 
-import { CopyShareButton } from "@/components/copy-share-button";
-import { HermesQuickLauncher } from "@/components/hermes-quick-launcher";
-import { SystemTelemetry } from "@/components/system-telemetry";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { auth } from "@/auth";
+import { CartmanAvatar } from "@/components/cartman-avatar";
+import { CHAT_SUGGESTIONS, getChatSuggestionHref } from "@/lib/chat-suggestions.mjs";
 
-const COCKPIT_URL = "https://100.115.141.25:9090";
-const PORTAINER_URL = "https://100.115.141.25:9443";
-const WINDOWS_SHARE_PATH = "\\\\100.115.141.25\\Storage";
+export const instant = false;
 
 export default function Home() {
   return (
-    <main
-      id="main-content"
-      className="ambient-canvas min-h-svh text-zinc-100"
+    <Suspense
+      fallback={
+        <main
+          id="main-content"
+          className="ambient-canvas flex min-h-svh items-center justify-center px-4 text-sm text-[#52636b]"
+        >
+          Loading workspace…
+        </main>
+      }
     >
-      <div className="relative z-10 mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 sm:py-12 lg:px-10 lg:py-14 space-y-10">
-        {/* Top Status & Context Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.07] pb-4 text-xs">
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-400 font-mono text-[11px]">
-              <span className="relative flex size-2">
-                <span className="animate-live-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
-              </span>
-              Debian Host Online
-            </span>
-            <span className="text-zinc-400 hidden sm:inline">·</span>
-            <span className="font-mono text-zinc-400 hidden sm:inline">100.115.141.25</span>
-          </div>
+      <WorkspaceHome />
+    </Suspense>
+  );
+}
 
-          <div className="flex items-center gap-3 text-zinc-400 font-mono text-[11px]">
-            <span className="rounded-md border border-white/[0.08] bg-white/[0.03] px-2 py-0.5 text-zinc-300">
-              Tailscale Mesh Active
-            </span>
-            <span className="hidden md:inline">3 Core Services</span>
-          </div>
-        </div>
+async function WorkspaceHome() {
+  await connection();
+  const session = await auth();
+  const displayName = session?.user?.name?.trim() || null;
+  const initials = displayName
+    ? displayName
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((part) => part[0])
+        .join("")
+        .toUpperCase()
+    : "G";
 
-        {/* Hero Header */}
-        <header className="flex flex-col gap-4">
-          <div className="inline-flex items-center gap-2 text-xs font-medium text-cyan-400">
-            <Server className="size-4" aria-hidden="true" />
-            <span>Private Command Center</span>
-          </div>
-          <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl lg:text-5xl">
-            Home Lab Infrastructure
-          </h1>
-          <p className="max-w-2xl text-sm leading-relaxed text-zinc-400 sm:text-base">
-            Unified control console for system administration, container orchestration, and network storage
-            operating on the private Debian cluster.
+  return (
+    <main id="main-content" className="ambient-canvas min-h-svh text-[#20313a]">
+      <div className="mx-auto w-full max-w-[1440px] px-5 py-5 sm:px-8 lg:px-10">
+        <header className="flex min-h-14 items-center justify-between gap-4 border-b border-[#d2dde0] pb-4">
+          <p className="font-heading text-xl font-bold text-[#213642] sm:text-2xl">
+            Workspace
           </p>
+          <div className="flex items-center gap-3">
+            <div className="text-right">
+              <p className="text-xs text-[#6c7b82]">Signed in as</p>
+              <p className="max-w-44 truncate text-sm font-semibold text-[#243640]">
+                {displayName ?? "Guest"}
+              </p>
+            </div>
+            <span
+              className="flex size-10 items-center justify-center rounded-full bg-[#dce7ea] text-xs font-bold text-[#36515d]"
+              aria-hidden="true"
+            >
+              {initials}
+            </span>
+          </div>
         </header>
 
-        {/* Primary Service Bento */}
-        <section aria-labelledby="services-heading" className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 id="services-heading" className="text-sm font-semibold tracking-wide text-zinc-300 uppercase">
-              Core Services
-            </h2>
-            <span className="text-xs text-zinc-400">Direct HTTPS & SMB Access</span>
-          </div>
-
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
-            {/* Cockpit Card */}
-            <Card className="glass-panel flex flex-col justify-between rounded-2xl border-white/[0.08] p-6 text-zinc-100">
-              <CardHeader className="p-0 gap-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex size-11 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">
-                    <Gauge className="size-5" aria-hidden="true" />
-                  </div>
-                  <Badge variant="outline" className="rounded-full border-cyan-400/30 bg-cyan-400/10 text-cyan-300 font-mono text-[10px]">
-                    Port 9090
-                  </Badge>
-                </div>
-                <div className="space-y-1.5">
-                  <CardTitle className="text-xl font-semibold text-white tracking-tight">
-                    Cockpit
-                  </CardTitle>
-                  <CardDescription className="text-xs leading-relaxed text-zinc-400">
-                    Debian host monitoring, terminal shell, system storage, and routine OS administration.
-                  </CardDescription>
-                </div>
-              </CardHeader>
-
-              <CardContent className="p-0 pt-6 mt-auto space-y-4">
-                <div className="rounded-xl border border-white/[0.06] bg-black/30 p-2.5 font-mono text-xs text-zinc-400 overflow-x-auto">
-                  <code>{COCKPIT_URL}</code>
-                </div>
-                <a
-                  href={COCKPIT_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="tactile-button focus-ring-glow inline-flex min-h-10 w-full items-center justify-between rounded-xl bg-white/[0.06] px-4 text-xs font-semibold text-white border border-white/10 hover:border-white/20 hover:bg-white/[0.1] hover:text-white"
-                  aria-label="Open Cockpit in a new browser tab"
-                >
-                  <span>Launch Cockpit</span>
-                  <ExternalLink className="size-3.5 text-zinc-400" aria-hidden="true" />
-                </a>
-              </CardContent>
-            </Card>
-
-            {/* Portainer Card */}
-            <Card className="glass-panel flex flex-col justify-between rounded-2xl border-white/[0.08] p-6 text-zinc-100">
-              <CardHeader className="p-0 gap-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex size-11 items-center justify-center rounded-xl border border-blue-400/20 bg-blue-400/10 text-blue-300">
-                    <Boxes className="size-5" aria-hidden="true" />
-                  </div>
-                  <Badge variant="outline" className="rounded-full border-blue-400/30 bg-blue-400/10 text-blue-300 font-mono text-[10px]">
-                    Port 9443
-                  </Badge>
-                </div>
-                <div className="space-y-1.5">
-                  <CardTitle className="text-xl font-semibold text-white tracking-tight">
-                    Portainer CE
-                  </CardTitle>
-                  <CardDescription className="text-xs leading-relaxed text-zinc-400">
-                    Docker container orchestration, image registries, compose stacks, and network management.
-                  </CardDescription>
-                </div>
-              </CardHeader>
-
-              <CardContent className="p-0 pt-6 mt-auto space-y-4">
-                <div className="rounded-xl border border-white/[0.06] bg-black/30 p-2.5 font-mono text-xs text-zinc-400 overflow-x-auto">
-                  <code>{PORTAINER_URL}</code>
-                </div>
-                <a
-                  href={PORTAINER_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="tactile-button focus-ring-glow inline-flex min-h-10 w-full items-center justify-between rounded-xl bg-white/[0.06] px-4 text-xs font-semibold text-white border border-white/10 hover:border-white/20 hover:bg-white/[0.1] hover:text-white"
-                  aria-label="Open Portainer in a new browser tab"
-                >
-                  <span>Launch Portainer</span>
-                  <ExternalLink className="size-3.5 text-zinc-400" aria-hidden="true" />
-                </a>
-              </CardContent>
-            </Card>
-
-            {/* Windows Storage Card */}
-            <Card className="glass-panel flex flex-col justify-between rounded-2xl border-white/[0.08] p-6 text-zinc-100">
-              <CardHeader className="p-0 gap-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex size-11 items-center justify-center rounded-xl border border-amber-400/20 bg-amber-400/10 text-amber-300">
-                    <HardDrive className="size-5" aria-hidden="true" />
-                  </div>
-                  <Badge variant="outline" className="rounded-full border-amber-400/30 bg-amber-400/10 text-amber-300 font-mono text-[10px]">
-                    SMB Port 445
-                  </Badge>
-                </div>
-                <div className="space-y-1.5">
-                  <CardTitle className="text-xl font-semibold text-white tracking-tight">
-                    Windows Storage
-                  </CardTitle>
-                  <CardDescription className="text-xs leading-relaxed text-zinc-400">
-                    High-speed network share. Paste into Windows File Explorer or mount as network drive.
-                  </CardDescription>
-                </div>
-              </CardHeader>
-
-              <CardContent className="p-0 pt-6 mt-auto space-y-4">
-                <div className="rounded-xl border border-white/[0.06] bg-black/30 p-2.5 font-mono text-xs text-zinc-300 overflow-x-auto">
-                  <code>{WINDOWS_SHARE_PATH}</code>
-                </div>
-                <CopyShareButton value={WINDOWS_SHARE_PATH} />
-              </CardContent>
-            </Card>
-          </div>
-        </section>
-
-        {/* Hermes AI Assistant Quick Dock */}
-        <HermesQuickLauncher />
-
-        {/* System Telemetry Section */}
-        <SystemTelemetry />
-
-        {/* Tailscale Boundary Note */}
-        <aside
-          aria-labelledby="tailscale-notice"
-          className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4"
-        >
-          <div className="flex size-10 items-center justify-center rounded-xl bg-white/[0.05] text-cyan-400 shrink-0">
-            <Radio className="size-5" aria-hidden="true" />
-          </div>
-          <div className="min-w-0">
-            <h3 id="tailscale-notice" className="text-sm font-medium text-white">
-              Zero-Trust Tailscale Boundary
-            </h3>
-            <p className="mt-0.5 text-xs text-zinc-400 leading-relaxed">
-              Services are bound to private Tailscale subnet (100.115.141.25). Verify your device is connected
-              before accessing administrative endpoints or network shares.
+        <section className="grid items-start gap-12 pt-9 sm:pt-12 lg:grid-cols-[minmax(0,1fr)_minmax(17rem,0.42fr)] lg:gap-16 lg:pt-14">
+          <div className="min-w-0 max-w-4xl">
+            <p className="text-sm font-semibold text-[#a6322c]">Eric AI</p>
+            <h1 className="mt-3 max-w-3xl font-heading text-5xl font-bold leading-[0.98] tracking-tight text-[#1d3039] text-balance sm:text-6xl">
+              What do you need help with?
+            </h1>
+            <p className="mt-4 max-w-2xl text-base leading-7 text-[#53656d]">
+              Ask a question, paste an error, or start with one of the prompts below.
             </p>
-          </div>
-        </aside>
 
-        {/* Footer */}
-        <footer className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-white/[0.07] pt-6 text-xs text-zinc-400 font-mono">
-          <span>Harvy Home Lab &middot; Private Console</span>
-          <span>Debian 12 &middot; Tailscale 100.115.141.25</span>
-        </footer>
+            <form action="/chat" method="get" className="mt-8 max-w-3xl">
+              <label
+                htmlFor="workspace-question"
+                className="block text-sm font-semibold text-[#283b44]"
+              >
+                Start a conversation
+              </label>
+              <div className="mt-2 flex min-h-14 items-stretch gap-2 rounded-lg border border-[#bac9ce] bg-white p-1.5 shadow-[0_2px_8px_rgba(29,48,57,0.04)] focus-within:border-[#ae342d] focus-within:ring-2 focus-within:ring-[#ae342d]/20">
+                <input
+                  id="workspace-question"
+                  name="q"
+                  type="text"
+                  autoComplete="off"
+                  required
+                  placeholder="Ask or paste an error…"
+                  className="min-w-0 flex-1 rounded-md bg-transparent px-3 text-base text-[#20313a] outline-none placeholder:text-[#829097]"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-md bg-[#ad342d] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#922a24] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ad342d]"
+                >
+                  Open chat
+                  <ArrowUpRight className="size-4" aria-hidden="true" />
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-[#6c7b82]">
+                Your question is pre-filled. It won’t be sent until you choose Send.
+              </p>
+            </form>
+
+            <section className="mt-11 max-w-3xl" aria-labelledby="starter-heading">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2
+                  id="starter-heading"
+                  className="font-heading text-2xl font-bold text-[#213642]"
+                >
+                  Try a starting point
+                </h2>
+                <Link
+                  href="/chat"
+                  className="inline-flex min-h-11 items-center gap-1 text-sm font-semibold text-[#a6322c] underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ad342d]"
+                >
+                  Open chat
+                  <ArrowUpRight className="size-4" aria-hidden="true" />
+                </Link>
+              </div>
+              <div className="mt-3 divide-y divide-[#d5dfe2] border-y border-[#d5dfe2]">
+                {CHAT_SUGGESTIONS.map((suggestion) => (
+                  <Link
+                    key={suggestion.id}
+                    href={getChatSuggestionHref(suggestion.id) ?? "/chat"}
+                    className="group flex min-h-[4.5rem] items-center gap-4 px-2 py-3 outline-none transition-colors hover:bg-[#e8eff1] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#ad342d] sm:px-3"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold text-[#263943] group-hover:text-[#9f3029]">
+                        {suggestion.label}
+                      </span>
+                      <span className="mt-1 block text-sm leading-5 text-[#63727a]">
+                        {suggestion.prompt}
+                      </span>
+                    </span>
+                    <ArrowUpRight
+                      className="size-4 shrink-0 text-[#73838a] group-hover:text-[#a6322c]"
+                      aria-hidden="true"
+                    />
+                  </Link>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <aside className="mx-auto w-full max-w-sm lg:pt-2">
+            <div className="flex h-[19rem] items-end justify-center overflow-hidden rounded-lg bg-[#dce8eb] px-4 pt-5 sm:h-[22rem]">
+              <CartmanAvatar className="h-full max-h-[21rem] w-full object-contain object-bottom" />
+            </div>
+            <div className="mt-4 flex items-baseline justify-between gap-3 border-b border-[#d2dde0] pb-3">
+              <div>
+                <h2 className="font-heading text-2xl font-bold text-[#213642]">Eric</h2>
+                <p className="text-sm text-[#697980]">AI assistant</p>
+              </div>
+            </div>
+            <div className="pt-4">
+              <div className="flex items-center gap-2 text-sm font-semibold text-[#344e59]">
+                <ShieldCheck className="size-4 text-[#a6322c]" aria-hidden="true" />
+                A note on privacy
+              </div>
+              <p className="mt-2 text-sm leading-6 text-[#566870]">
+                Eric only knows what you share here; it can’t access your files or other accounts.
+              </p>
+              <p className="mt-3 text-xs leading-5 text-[#6c7b82]">
+                When web search helps, your query may go to an external provider. Don’t paste secrets.
+              </p>
+              <p className="mt-5 text-[11px] leading-4 text-[#7b898e]">
+                Not affiliated with or endorsed by South Park, Comedy Central, or Paramount.
+              </p>
+            </div>
+          </aside>
+        </section>
       </div>
     </main>
   );

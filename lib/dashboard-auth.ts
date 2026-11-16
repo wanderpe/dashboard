@@ -1,144 +1,206 @@
 import "server-only";
 
-import { cookies } from "next/headers";
-import { NextRequest, NextResponse } from "next/server";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { headers } from "next/headers";
+import { getToken } from "next-auth/jwt";
+import { NextRequest } from 'next/server';
 
-export const OWNER_SESSION_COOKIE = "harvy_dashboard_owner";
+export const SESSION_COOKIE = 'harvy_dashboard_session';
 
-// Legacy self-contained owner session (HMAC of the owner token). Kept so
-// existing UI/config still resolves; the dashboard now hands out bearer
-// sessions from the sessions-api instead of deriving a client-side HMAC.
-
-const SESSION_PURPOSE = "harvy-dashboard-owner-session-v1";
-const MIN_OWNER_TOKEN_LENGTH = 24;
-const SESSION_API_URL = process.env.SESSION_API_URL ?? "http://127.0.0.1:3001";
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
-
-export function getOwnerToken() {
-  const value = process.env.DASHBOARD_OWNER_TOKEN?.trim() ?? "";
-  return value.length >= MIN_OWNER_TOKEN_LENGTH ? value : null;
-}
-
-export function isOwnerAuthConfigured() {
-  return getOwnerToken() !== null;
-}
-
-export function verifyOwnerToken(candidate: string) {
-  const ownerToken = getOwnerToken();
-  return ownerToken !== null && safeEqual(candidate, ownerToken);
-}
-
-function safeEqual(left: string, right: string) {
-  const leftHash = createHash("sha256").update(left).digest();
-  const rightHash = createHash("sha256").update(right).digest();
-
-  return timingSafeEqual(leftHash, rightHash);
-}
-
-export function getOwnerSessionValue() {
-  const ownerToken = getOwnerToken();
-  if (!ownerToken) return null;
-  return createHmac("sha256", ownerToken).update(SESSION_PURPOSE).digest("base64url");
-}
-
-export function verifyOwnerSession(candidate: string | undefined) {
-  const expected = getOwnerSessionValue();
-  return expected !== null && !!candidate && safeEqual(candidate, expected);
-}
+const SESSION_API_URL = process.env.SESSION_API_URL ?? 'http://127.0.0.1:3001';
 
 export function isSecureRequest(request: NextRequest) {
-  const forwardedProtocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  return forwardedProtocol === "https" || new URL(request.url).protocol === "https:";
+  const forwardedProtocol = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  return forwardedProtocol === 'https' || new URL(request.url).protocol === 'https:';
 }
 
 export interface SessionTokenRecord {
   token: string;
   id: string;
+  userId: string;
+  displayName: string | null;
+  username?: string | null;
+  email?: string | null;
   expiresAt: string;
 }
 
-// Handshake with the sessions-api backend: issues a bearer session for the
-// authenticated owner (or any configured user). The token is later handed to
-// the browser as an httpOnly session cookie.
-export async function registerOwnerSession(
-  userId: string = process.env.OWNER_USER_ID ?? "owner",
-  userEmail: string = process.env.OWNER_USER_EMAIL ?? "owner@lab.local",
-): Promise<SessionTokenRecord> {
-  const res = await fetch(`${SESSION_API_URL}/api/sessions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId: userId ?? null, userEmail: userEmail ?? null }),
+export async function registerFriendAccount(input: {
+  username: string;
+  email: string;
+  password: string;
+  name: string;
+}) {
+  const response = await fetch(`${SESSION_API_URL}/api/users`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+    cache: 'no-store',
   });
 
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: { message?: string } };
-    throw new Error(body?.error?.message ?? "Could not register dashboard session.");
+  if (!response.ok) {
+    await throwSessionApiError(response, 'Could not create the chat account.');
   }
 
-  const data = (await res.json()) as SessionTokenRecord & { token: string };
-  return { token: data.token, id: data.id, expiresAt: data.expiresAt };
+  const data = (await response.json()) as {
+    id: string;
+    username: string | null;
+    email: string | null;
+    sessionToken: string;
+    expiresAt: string;
+  };
+
+  return {
+    token: data.sessionToken,
+    id: data.id,
+    userId: data.id,
+    displayName: input.name,
+    username: data.username,
+    email: data.email,
+    expiresAt: data.expiresAt,
+  };
 }
 
-export async function getSessionToken(): Promise<string | null> {
-  const cookieStore = await cookies();
-  return cookieStore.get(OWNER_SESSION_COOKIE)?.value ?? null;
-}
-
-export function setSessionToken(token: string, request: NextRequest): NextResponse {
-  const response = NextResponse.next();
-  response.cookies.set({
-    name: OWNER_SESSION_COOKIE,
-    value: token,
-    httpOnly: true,
-    sameSite: "strict",
-    secure: isSecureRequest(request),
-    path: "/",
-    maxAge: SESSION_TTL_SECONDS,
+export async function loginFriendAccount(email: string, password: string): Promise<SessionTokenRecord> {
+  const response = await fetch(`${SESSION_API_URL}/api/users/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+    cache: 'no-store',
   });
-  return response;
+
+  if (!response.ok) {
+    await throwSessionApiError(response, 'Invalid email or password.');
+  }
+
+  const data = (await response.json()) as {
+    userId: string;
+    userEmail: string | null;
+    sessionToken: string;
+    expiresAt: string;
+  };
+
+  const profileResponse = await fetch(`${SESSION_API_URL}/api/users/me`, {
+    headers: { 'x-session-token': data.sessionToken },
+    cache: 'no-store',
+  });
+  const profile = profileResponse.ok
+    ? (await profileResponse.json()) as { displayName?: string | null; username?: string | null; email?: string | null }
+    : null;
+
+  return {
+    token: data.sessionToken,
+    id: data.userId,
+    userId: data.userId,
+    displayName: profile?.displayName ?? null,
+    username: profile?.username ?? null,
+    email: profile?.email ?? data.userEmail,
+    expiresAt: data.expiresAt,
+  };
 }
 
-export function removeSessionToken(_request?: NextRequest): NextResponse {
-  const response = NextResponse.next();
-  response.cookies.set({
-    name: OWNER_SESSION_COOKIE,
-    value: "",
-    expires: new Date(0),
-    path: "/",
+async function throwSessionApiError(response: Response, fallback: string): Promise<never> {
+  const body = (await response.json().catch(() => null)) as {
+    message?: string;
+    error?: { message?: string };
+  } | null;
+  const error = new Error(
+    body?.message ?? body?.error?.message ?? fallback,
+  ) as Error & { statusCode?: number };
+  error.statusCode = response.status >= 400 && response.status < 500
+    ? response.status
+    : 503;
+  throw error;
+}
+
+export async function revokeSession(token: string) {
+  await fetch(`${SESSION_API_URL}/api/sessions/${encodeURIComponent(token)}/revoke`, {
+    method: 'DELETE',
+    cache: 'no-store',
+  }).catch(() => undefined);
+}
+
+export async function getSessionToken() {
+  const requestHeaders = await headers();
+  const jwt = await getToken({
+    req: { headers: requestHeaders },
+    secret: process.env.AUTH_SECRET,
+    secureCookie: process.env.NODE_ENV === 'production',
   });
-  return response;
+  const authSessionToken = jwt?.sessionToken;
+  return typeof authSessionToken === 'string' && authSessionToken ? authSessionToken : null;
 }
 
 export interface SessionState {
   authenticated: boolean;
-  configured: boolean;
-  chatMode: "live" | "mock" | "unconfigured";
+  chatMode: 'live' | 'mock' | 'unconfigured';
 }
 
-// Verifies the browser's session token against the sessions-api. The token
-// lives in the httpOnly cookie; a client-provided token may also be sent via
-// the X-Session-Token header on non-browser/mobile clients.
-export async function verifySession(
-  request: NextRequest,
-): Promise<SessionState> {
-  const token = (await getSessionToken()) ?? request.headers.get("x-session-token");
-  if (!token) {
-    return { authenticated: false, configured: isOwnerAuthConfigured(), chatMode: "unconfigured" };
+export interface VerifiedSession extends SessionState {
+  sessionToken: string | null;
+  userId: string | null;
+  profile: {
+    displayName: string | null;
+    username: string | null;
+  } | null;
+}
+
+export async function getVerifiedSession(request: NextRequest): Promise<VerifiedSession> {
+  const sessionToken = (await getSessionToken()) ?? request.headers.get('x-session-token');
+
+  if (!sessionToken) {
+    return {
+      authenticated: false,
+      chatMode: 'unconfigured',
+      sessionToken: null,
+      userId: null,
+      profile: null,
+    };
   }
 
   try {
-    const res = await fetch(
-      `${SESSION_API_URL}/api/sessions/${encodeURIComponent(token)}/verify`,
-      { method: "GET" },
+    const response = await fetch(
+      `${SESSION_API_URL}/api/sessions/${encodeURIComponent(sessionToken)}/verify`,
+      { method: 'GET', cache: 'no-store' },
     );
 
-    if (res.status === 401 || res.status === 403 || !res.ok) {
-      return { authenticated: false, configured: isOwnerAuthConfigured(), chatMode: "unconfigured" };
+    if (!response.ok) {
+      return {
+        authenticated: false,
+        chatMode: 'unconfigured',
+        sessionToken: null,
+        userId: null,
+        profile: null,
+      };
     }
 
-    return { authenticated: true, configured: isOwnerAuthConfigured(), chatMode: "live" };
+    const session = (await response.json()) as {
+      userId?: string | null;
+      profile?: { displayName?: unknown; username?: unknown } | null;
+    };
+    const profile = session.profile && typeof session.profile === 'object'
+      ? {
+          displayName: typeof session.profile.displayName === 'string' ? session.profile.displayName : null,
+          username: typeof session.profile.username === 'string' ? session.profile.username : null,
+        }
+      : null;
+    return {
+      authenticated: true,
+      chatMode: 'live',
+      sessionToken,
+      userId: session.userId ?? null,
+      profile,
+    };
   } catch {
-    return { authenticated: false, configured: isOwnerAuthConfigured(), chatMode: "unconfigured" };
+    return {
+      authenticated: false,
+      chatMode: 'unconfigured',
+      sessionToken: null,
+      userId: null,
+      profile: null,
+    };
   }
+}
+
+export async function verifySession(request: NextRequest): Promise<SessionState> {
+  const { authenticated, chatMode } = await getVerifiedSession(request);
+  return { authenticated, chatMode };
 }

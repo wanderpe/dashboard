@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Project-local skill repositories are reference material, not app source.
+    ".agents/skills/**",
   ]),
 ]);
 

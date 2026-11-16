@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Barlow_Condensed, Geist, Geist_Mono } from "next/font/google";
 
 import { DashboardShell } from "@/components/dashboard-shell";
+import { AuthSessionProvider } from "@/components/auth-session-provider";
 
 import "./globals.css";
 
@@ -15,9 +16,15 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const barlowCondensed = Barlow_Condensed({
+  variable: "--font-display",
+  subsets: ["latin"],
+  weight: ["600", "700", "800"],
+  display: "swap",
+});
+
 export const metadata: Metadata = {
-  title: "Harvy's Home Lab Command Center",
-  description: "Private control interface for Harvy's home lab services.",
+  title: "Eric AI",
 };
 
 export default function RootLayout({
@@ -28,10 +35,12 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${barlowCondensed.variable} h-full antialiased`}
     >
-      <body className="min-h-full bg-[#020914]">
-        <DashboardShell>{children}</DashboardShell>
+      <body className="min-h-full bg-[#f1f5f6]">
+        <AuthSessionProvider>
+          <DashboardShell>{children}</DashboardShell>
+        </AuthSessionProvider>
       </body>
     </html>
   );
