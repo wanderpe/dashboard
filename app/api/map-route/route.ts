@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
     return errorResponse("invalid_request", "Send the route request as JSON.", 415);
   }
 
-  const clientRateLimit = publicRateLimits.chatRequest(request.headers);
+  const clientRateLimit = publicRateLimits.mapRequest(request.headers);
   if (!clientRateLimit.allowed) return rateLimitResponse(clientRateLimit.retryAfterMs);
 
   let session;
@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     return errorResponse("owner_auth_required", "Authentication is required to use Eric AI.", 401);
   }
 
-  const userRateLimit = publicRateLimits.chatUser(session.userId);
+  const userRateLimit = publicRateLimits.mapUser(session.userId);
   if (!userRateLimit.allowed) return rateLimitResponse(userRateLimit.retryAfterMs);
 
   let body: unknown;

@@ -21,6 +21,8 @@ export declare function createPublicRateLimits(): {
   login(headers: RateLimitHeaders, email: string, now?: number): RateLimitDecision;
   chatRequest(headers: RateLimitHeaders, now?: number): RateLimitDecision;
   chatUser(userId: string, now?: number): RateLimitDecision;
+  mapRequest(headers: RateLimitHeaders, now?: number): RateLimitDecision;
+  mapUser(userId: string, now?: number): RateLimitDecision;
   chat(headers: RateLimitHeaders, userId: string, now?: number): RateLimitDecision;
 };
 

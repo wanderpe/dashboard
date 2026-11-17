@@ -152,3 +152,72 @@ test("chat policy limits both an account burst and aggregate traffic", () => {
     false,
   );
 });
+
+test("map lookups have a separate budget from chat turns", () => {
+  const createPublicRateLimits = implementation("createPublicRateLimits");
+  const limits = createPublicRateLimits();
+  const headers = funnelHeaders("203.0.113.44");
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const now = 1_000 + attempt;
+    assert.equal(limits.chat(headers, "user-a", now).allowed, true);
+    assert.equal(limits.mapRequest(headers, now).allowed, true);
+    assert.equal(limits.mapUser("user-a", now).allowed, true);
+  }
+
+  assert.equal(limits.chat(headers, "user-a", 2_000).allowed, false);
+  assert.equal(limits.mapRequest(headers, 2_000).allowed, true);
+  assert.equal(limits.mapUser("user-a", 2_000).allowed, true);
+});
+
+test("map requests enforce separate client and user minute caps", () => {
+  const createPublicRateLimits = implementation("createPublicRateLimits");
+  const headers = funnelHeaders("203.0.113.45");
+  const clientLimits = createPublicRateLimits();
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    assert.equal(clientLimits.mapRequest(headers, 1_000 + attempt).allowed, true);
+  }
+  assert.equal(clientLimits.mapRequest(headers, 2_000).allowed, false);
+  assert.equal(clientLimits.mapUser("user-a", 2_000).allowed, true);
+
+  const userLimits = createPublicRateLimits();
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    assert.equal(userLimits.mapUser("user-a", 1_000 + attempt).allowed, true);
+  }
+  assert.equal(userLimits.mapUser("user-a", 2_000).allowed, false);
+  assert.equal(userLimits.chat(headers, "user-a", 2_000).allowed, true);
+});
+
+test("map user hourly cap applies across separate minute windows", () => {
+  const createPublicRateLimits = implementation("createPublicRateLimits");
+  const limits = createPublicRateLimits();
+  const headers = funnelHeaders("203.0.113.46");
+
+  for (let minute = 0; minute < 5; minute += 1) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const now = 1_000 + minute * 60_000 + attempt;
+      assert.equal(limits.mapRequest(headers, now).allowed, true);
+      assert.equal(limits.mapUser("user-a", now).allowed, true);
+    }
+  }
+
+  assert.equal(limits.mapRequest(headers, 301_000).allowed, true);
+  assert.equal(limits.mapUser("user-a", 301_000).allowed, false);
+});
+
+test("unauthenticated map request limits do not consume the authenticated global cap", () => {
+  const createPublicRateLimits = implementation("createPublicRateLimits");
+  const limits = createPublicRateLimits();
+  const headers = funnelHeaders("203.0.113.47");
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    assert.equal(limits.mapRequest(headers, 1_000 + attempt).allowed, true);
+  }
+  assert.equal(limits.mapRequest(headers, 2_000).allowed, false);
+
+  for (let user = 0; user < 30; user += 1) {
+    assert.equal(limits.mapUser(`user-${user}`, 2_000).allowed, true);
+  }
+  assert.equal(limits.mapUser("global-overflow", 2_000).allowed, false);
+});
