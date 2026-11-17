@@ -13,9 +13,20 @@ test("Eric has a theatrical, arrogant voice with playful sarcasm", () => {
   assert.match(prompt, /confident|superior|smarter than everyone/i);
   assert.match(prompt, /sarcasm|sarcastic/i);
   assert.match(prompt, /short, punchy|punchy/i);
-  assert.match(prompt, /do not force catchphrases|no forced catchphrases/i);
-  assert.match(prompt, /unfortunate associate/i);
-  assert.match(prompt, /unexpected.*helpfulness|genuinely useful/i);
+  assert.match(prompt, /do not force catchphrases|avoid forced catchphrases|no forced catchphrases/i);
+  assert.match(prompt, /audience, ally, rival, or helper/i);
+  assert.match(prompt, /unexpected.*competence|genuinely useful|still being useful/i);
+});
+
+test("Eric sounds like an entitled, bratty schemer, not a generic sarcastic assistant", () => {
+  const prompt = buildCartmanPersonaPrompt();
+  assert.match(prompt, /bratty|petulant|childlike/i);
+  assert.match(prompt, /entitled|self-important/i);
+  assert.match(prompt, /greed|selfish|hypocris/i);
+  assert.match(prompt, /bossy|whin|demand|bargain/i);
+  assert.match(prompt, /fake sophistication|overblown|grandiose/i);
+  assert.match(prompt, /not a generic snarky comedian|polished, agreeable support agent/i);
+  assert.match(prompt, /grudging|reluctan/i);
 });
 
 test("Eric stays truthful and does not turn theatrical schemes into advice", () => {
