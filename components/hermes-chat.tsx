@@ -851,7 +851,7 @@ export function HermesChat() {
       <section
         aria-label="Eric conversation"
         aria-busy={streaming}
-        className="relative z-10 min-h-0"
+        className="relative z-10 min-h-0 min-w-0"
       >
         <MessageScrollerProvider
           autoScroll={messages.length > 0}

@@ -12,10 +12,9 @@ import {
   MessageContent,
   MessageHeader,
 } from "@/components/ui/message";
-import {
-  getUniqueCitationSources,
-  parseInlineCitations,
-} from "@/lib/inline-citations.mjs";
+import { getUniqueCitationSources, parseInlineCitations } from "@/lib/inline-citations.mjs";
+import { parseCartmanWidgetContent } from "@/lib/cartman-widget-protocol.mjs";
+import { CartmanRouteMapWidget } from "@/components/ai-elements/route-map-widget";
 import type { ToolProgressStep } from "@/lib/tool-progress.mjs";
 import { cn } from "@/lib/utils";
 
@@ -42,24 +41,37 @@ export function AIChatMessage({
 }: AIChatMessageProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const isUser = message.role === "user";
-  const assistantSegments = isUser
+  const assistantParts = isUser
     ? []
-    : parseInlineCitations(message.content);
+    : parseCartmanWidgetContent(message.content, { streaming });
+  const assistantSegments = assistantParts.flatMap((part) =>
+    part.type === "text" ? parseInlineCitations(part.text) : [],
+  );
+  const visibleAssistantText = assistantParts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+  const hasInteractiveWidget = assistantParts.some((part) => part.type === "widget");
   const sources = getUniqueCitationSources(assistantSegments);
   const content = isUser
     ? message.content
-    : assistantSegments.map((segment, index) =>
-        segment.type === "citation" ? (
-          <InlineCitation
-            key={`citation-${index}`}
-            label={segment.label}
-            title={segment.title}
-            url={segment.url}
-          />
-        ) : (
-          <span key={`text-${index}`}>{segment.text}</span>
-        ),
-      );
+    : assistantParts.map((part, partIndex) => {
+        if (part.type === "widget") {
+          return <CartmanRouteMapWidget key={`widget-${partIndex}`} widget={part.widget} />;
+        }
+        return parseInlineCitations(part.text).map((segment, segmentIndex) =>
+          segment.type === "citation" ? (
+            <InlineCitation
+              key={`citation-${partIndex}-${segmentIndex}`}
+              label={segment.label}
+              title={segment.title}
+              url={segment.url}
+            />
+          ) : (
+            <span key={`text-${partIndex}-${segmentIndex}`}>{segment.text}</span>
+          ),
+        );
+      });
 
   return (
     <Message align={isUser ? "end" : "start"} className="items-start gap-3">
@@ -90,11 +102,15 @@ export function AIChatMessage({
         <Bubble
           align={isUser ? "end" : "start"}
           variant="ghost"
-          className="max-w-[min(100%,42rem)]"
+          className={cn(
+            "max-w-[min(100%,42rem)]",
+            !isUser && hasInteractiveWidget && "w-full",
+          )}
         >
           <BubbleContent
             className={cn(
               "!block !max-w-full !border !px-4 !py-3 text-base leading-7 !shadow-none",
+              !isUser && hasInteractiveWidget ? "!w-full" : null,
               isUser
                 ? "!rounded-2xl !rounded-tr-sm !border-[#263d4a] !bg-[#203642] !text-white"
                 : "!rounded-xl !border-[#d7e1e4] !bg-white !px-5 !py-4 !text-[#223640] !shadow-sm",
@@ -103,7 +119,7 @@ export function AIChatMessage({
             {!isUser ? (
               <ChainOfThoughtTrace steps={toolSteps} streaming={streaming} />
             ) : null}
-            {message.content ? (
+            {message.content && (isUser || assistantParts.length > 0) ? (
               <>
                 <div className="whitespace-pre-wrap break-words">{content}</div>
                 {!isUser && sources.length > 0 ? (
@@ -115,20 +131,20 @@ export function AIChatMessage({
                 className="flex items-center gap-2 text-xs text-[#a6322c]"
                 role="status"
               >
-                <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
-                Eric is thinking…
+                <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                Eric is preparing a response…
               </div>
             )}
           </BubbleContent>
         </Bubble>
-        {!isUser && message.content && !streaming ? (
+        {!isUser && visibleAssistantText.trim() && !streaming ? (
           <button
             type="button"
             className="inline-flex min-h-11 cursor-pointer items-center gap-2 self-start rounded-md px-3 text-xs font-medium text-[#62747b] transition-colors hover:bg-[#e4ecef] hover:text-[#20313a] focus-visible:outline-2 focus-visible:outline-[#ad342d] focus-visible:outline-offset-1"
             aria-label={copyState === "copied" ? "Answer copied" : copyState === "error" ? "Copy failed; try again" : "Copy answer"}
             onClick={async () => {
               try {
-                await navigator.clipboard.writeText(message.content);
+                await navigator.clipboard.writeText(visibleAssistantText);
                 setCopyState("copied");
               } catch {
                 setCopyState("error");
