@@ -776,6 +776,166 @@ test("does not resolve a street-only query to a POI named after the street", asy
   });
 });
 
+test("resolves a uniquely typed shopping center with explicit locality qualifiers", async () => {
+  const query = "Ayala Center Cebu, Cebu City, Cebu";
+  const searchQuery = "Ayala Center Cebu mall, Cebu City, Cebu";
+  const requestedSearches = [];
+  let routingRequested = false;
+  const fetchImpl = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "nominatim.openstreetmap.org") {
+      const requestedQuery = url.searchParams.get("q");
+      requestedSearches.push({
+        query: requestedQuery,
+        addressdetails: url.searchParams.get("addressdetails"),
+        limit: url.searchParams.get("limit"),
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => requestedQuery === query || requestedQuery === searchQuery
+          ? [{
+              lat: "10.3181160",
+              lon: "123.9048331",
+              name: "Ayala Center Cebu",
+              display_name: "Ayala Center Cebu, Luz, Cebu City, Central Visayas, Philippines",
+              type: "mall",
+              class: "shop",
+              addresstype: "shop",
+              address: {
+                shop: "Ayala Center Cebu",
+                suburb: "Luz",
+                city: "Cebu City",
+                region: "Central Visayas",
+                country: "Philippines",
+              },
+            }]
+          : [],
+      };
+    }
+    routingRequested = true;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        code: "Ok",
+        routes: [{
+          distance: 1_000,
+          duration: 180,
+          geometry: { type: "LineString", coordinates: [[123.94, 10.32], [123.9048331, 10.318116]] },
+          legs: [],
+        }],
+      }),
+    };
+  };
+
+  const route = await mapRoute.fetchMapRoute({
+    origin: "Known origin",
+    destination: query,
+    mode: "driving",
+    confirmedCoordinates: { origin: { lat: 10.32, lon: 123.94 } },
+  }, { fetchImpl, cache: false, nominatimIntervalMs: 0 });
+
+  assert.deepEqual(requestedSearches, [{ query: searchQuery, addressdetails: "1", limit: "5" }]);
+  assert.deepEqual([route.destination.lat, route.destination.lon], [10.318116, 123.9048331]);
+  assert.equal(route.destination.label, "Ayala Center Cebu, Luz, Cebu City, Central Visayas, Philippines");
+  assert.equal(route.destination.source, "nominatim");
+  assert.equal(routingRequested, true);
+});
+
+test("keeps ambiguous same-name mall candidates unresolved after center classification", async () => {
+  const query = "Ayala Center Cebu, Cebu City, Cebu";
+  const searchQuery = "Ayala Center Cebu mall, Cebu City, Cebu";
+  const requestedQueries = [];
+  let routingRequested = false;
+  const makeCandidate = (lat, lon) => ({
+    lat,
+    lon,
+    name: "Ayala Center Cebu",
+    display_name: "Ayala Center Cebu, Cebu City, Cebu, Philippines",
+    type: "mall",
+    addresstype: "shop",
+    address: { shop: "Ayala Center Cebu", city: "Cebu City", country: "Philippines" },
+  });
+  const fetchImpl = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "nominatim.openstreetmap.org") {
+      const requestedQuery = url.searchParams.get("q");
+      requestedQueries.push(requestedQuery);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => requestedQuery === searchQuery
+          ? [makeCandidate("10.3181160", "123.9048331"), makeCandidate("10.3190000", "123.9060000")]
+          : [],
+      };
+    }
+    routingRequested = true;
+    throw new Error("OSRM must not receive ambiguous mall candidates");
+  };
+
+  await assert.rejects(
+    mapRoute.fetchMapRoute({
+      origin: "Known origin",
+      destination: query,
+      confirmedCoordinates: { origin: { lat: 10.32, lon: 123.94 } },
+    }, { fetchImpl, cache: false, nominatimIntervalMs: 0 }),
+    (error) => {
+      assert.equal(error.code, "place_not_found");
+      assert.deepEqual(error.details.unresolvedEndpoints, ["destination"]);
+      return true;
+    },
+  );
+  assert.deepEqual(requestedQueries, [searchQuery]);
+  assert.equal(routingRequested, false);
+});
+
+test("does not route a center request to a same-name parking feature", async () => {
+  const query = "Ayala Center Cebu, Cebu City, Cebu";
+  const searchQuery = "Ayala Center Cebu mall, Cebu City, Cebu";
+  const requestedQueries = [];
+  let routingRequested = false;
+  const fetchImpl = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "nominatim.openstreetmap.org") {
+      const requestedQuery = url.searchParams.get("q");
+      requestedQueries.push(requestedQuery);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => requestedQuery === searchQuery
+          ? [{
+              lat: "10.3170738",
+              lon: "123.9057435",
+              name: "Ayala Center Cebu",
+              display_name: "Ayala Center Cebu, Cebu City, Cebu, Philippines",
+              type: "parking",
+              addresstype: "amenity",
+              address: { amenity: "Ayala Center Cebu", city: "Cebu City", country: "Philippines" },
+            }]
+          : [],
+      };
+    }
+    routingRequested = true;
+    throw new Error("OSRM must not receive a parking feature as the shopping center");
+  };
+
+  await assert.rejects(
+    mapRoute.fetchMapRoute({
+      origin: "Known origin",
+      destination: query,
+      confirmedCoordinates: { origin: { lat: 10.32, lon: 123.94 } },
+    }, { fetchImpl, cache: false, nominatimIntervalMs: 0 }),
+    (error) => {
+      assert.equal(error.code, "place_not_found");
+      assert.deepEqual(error.details.unresolvedEndpoints, ["destination"]);
+      return true;
+    },
+  );
+  assert.deepEqual(requestedQueries, [searchQuery]);
+  assert.equal(routingRequested, false);
+});
+
 test("does not treat locality words in a named hospital as requested localities", async () => {
   await assertPlaceQueryResolved({
     query: "Mandaue City Hospital, A.S. Fortuna Road, Mandaue City",
