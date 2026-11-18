@@ -936,6 +936,75 @@ test("does not route a center request to a same-name parking feature", async () 
   assert.equal(routingRequested, false);
 });
 
+test("resolves a city hall returned under its local name and proceeds to routing", async () => {
+  const requestedQueries = [];
+  let routingRequested = false;
+  const fetchImpl = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "nominatim.openstreetmap.org") {
+      const query = url.searchParams.get("q");
+      requestedQueries.push(query);
+      const result = query === "Mandaue City Hall"
+        ? {
+            lat: "10.3274247",
+            lon: "123.9433220",
+            name: "Mandaue Presidencia",
+            display_name: "Mandaue Presidencia, P. Burgos Street, Centro, Mandaue, Central Visayas, Philippines",
+            type: "townhall",
+            class: "amenity",
+            addresstype: "amenity",
+            address: {
+              amenity: "Mandaue Presidencia",
+              road: "P. Burgos Street",
+              suburb: "Centro",
+              city: "Mandaue",
+              region: "Central Visayas",
+              country: "Philippines",
+            },
+          }
+        : query === "Ayala Center Cebu mall"
+          ? {
+              lat: "10.3181160",
+              lon: "123.9048331",
+              name: "Ayala Center Cebu",
+              display_name: "Ayala Center Cebu, Cardinal Rosales Avenue, Cebu City, Philippines",
+              type: "mall",
+              class: "shop",
+              addresstype: "shop",
+              address: { shop: "Ayala Center Cebu", road: "Cardinal Rosales Avenue", city: "Cebu City", country: "Philippines" },
+            }
+          : null;
+      return { ok: true, status: 200, json: async () => result ? [result] : [] };
+    }
+    routingRequested = true;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        code: "Ok",
+        routes: [{
+          distance: 20_000,
+          duration: 2_400,
+          geometry: { type: "LineString", coordinates: [[123.943322, 10.3274247], [123.9048331, 10.318116]] },
+          legs: [],
+        }],
+      }),
+    };
+  };
+
+  const route = await mapRoute.fetchMapRoute(
+    { origin: "Mandaue City Hall", destination: "Ayala Center Cebu", mode: "driving" },
+    { fetchImpl, cache: false, nominatimIntervalMs: 0 },
+  );
+
+  assert.deepEqual(requestedQueries, ["Mandaue City Hall", "Ayala Center Cebu mall"]);
+  assert.equal(route.origin.label, "Mandaue Presidencia, P. Burgos Street, Centro, Mandaue, Central Visayas, Philippines");
+  assert.deepEqual([route.origin.lat, route.origin.lon], [10.3274247, 123.943322]);
+  assert.deepEqual([route.destination.lat, route.destination.lon], [10.318116, 123.9048331]);
+  assert.equal(route.distanceMeters, 20_000);
+  assert.equal(routingRequested, true);
+});
+
 test("does not treat locality words in a named hospital as requested localities", async () => {
   await assertPlaceQueryResolved({
     query: "Mandaue City Hospital, A.S. Fortuna Road, Mandaue City",
