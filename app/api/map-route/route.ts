@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getVerifiedSession } from "@/lib/dashboard-auth";
+import {
+  readLimitedJsonBody,
+  RequestBodyTooLargeError,
+} from "@/lib/map-route-request-body.mjs";
 import { publicRateLimits } from "@/lib/public-rate-limits.mjs";
 import {
   fetchMapRoute,
@@ -10,9 +14,9 @@ import {
 const PUBLIC_CHAT_ENABLED = process.env.PUBLIC_CHAT_ENABLED === "true";
 const MAX_REQUEST_BYTES = 2_048;
 
-function errorResponse(code: string, message: string, status: number) {
+function errorResponse(code: string, message: string, status: number, details?: unknown) {
   return NextResponse.json(
-    { error: { code, message } },
+    { error: { code, message, ...(details === undefined ? {} : { details }) } },
     {
       status,
       headers: { "Cache-Control": "no-store, max-age=0" },
@@ -61,8 +65,11 @@ export async function POST(request: NextRequest) {
 
   let body: unknown;
   try {
-    body = await request.json();
-  } catch {
+    body = await readLimitedJsonBody(request.body, MAX_REQUEST_BYTES);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return errorResponse("request_too_large", "The map request is too large.", 413);
+    }
     return errorResponse("invalid_request", "The map request was not valid JSON.", 400);
   }
 
@@ -82,7 +89,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     if (error instanceof MapRouteError) {
-      return errorResponse(error.code, error.message, error.status);
+      return errorResponse(error.code, error.message, error.status, error.details);
     }
     return errorResponse("map_provider_unavailable", "Map routing is unavailable right now.", 502);
   }

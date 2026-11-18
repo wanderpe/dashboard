@@ -11,19 +11,43 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { Map as LeafletMap } from "leaflet";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { RoutePinMap } from "@/components/ai-elements/route-pin-picker";
+import { coordinatesForCurrentRoute, isValidCoordinates, routeContextForInputs, routeRequestContextMatches, routeSessionMatches } from "@/lib/route-map-request.mjs";
 
 type TravelMode = "driving" | "walking" | "cycling";
+type Endpoint = "origin" | "destination";
+type Coordinates = { lat: number; lon: number };
+type PendingRouteCoordinates = {
+  origin: string;
+  destination: string;
+  generation: number;
+  coordinates: Partial<Record<Endpoint, Coordinates>>;
+};
+type PinSelectionSession = {
+  origin: string;
+  destination: string;
+  generation: number;
+  details: PinSelectionDetails;
+};
+type PinDraft = { coordinate: Coordinates | null; latitude: string; longitude: string };
+type MapCenter = Coordinates & { label: string; zoom: number };
 type RouteMapWidgetData = {
   type: "route-map";
   origin: string;
   destination: string;
   mode: TravelMode;
 };
-type PlaceResult = { label: string; lat: number; lon: number };
+type PlaceResult = { label: string; lat: number; lon: number; source?: "nominatim" | "map_pin" };
+type PinSelectionDetails = {
+  unresolvedEndpoints: Endpoint[];
+  resolvedEndpoints: Partial<Record<Endpoint, PlaceResult>>;
+  mapCenter: MapCenter | null;
+};
 type RouteStep = { instruction: string; distanceMeters: number };
 type RouteResult = {
   origin: PlaceResult;
@@ -34,7 +58,15 @@ type RouteResult = {
   geometry: Array<[number, number]>;
   steps: RouteStep[];
 };
-type RouteStatus = "loading" | "ready" | "error";
+type RouteResultSession = {
+  origin: string;
+  destination: string;
+  mode: TravelMode;
+  revision: number;
+  generation: number;
+  route: RouteResult;
+};
+type RouteStatus = "loading" | "pinning" | "ready" | "error";
 
 const modeOptions = [
   { value: "driving", label: "Driving", Icon: CarFront },
@@ -52,8 +84,9 @@ function isCoordinate(value: unknown): value is number {
 
 function isPlaceResult(value: unknown): value is PlaceResult {
   if (!isRecord(value)) return false;
+  const sourceIsValid = value.source === undefined || value.source === "nominatim" || value.source === "map_pin";
   return (
-    typeof value.label === "string" &&
+    typeof value.label === "string" && sourceIsValid &&
     isCoordinate(value.lat) && value.lat >= -90 && value.lat <= 90 &&
     isCoordinate(value.lon) && value.lon >= -180 && value.lon <= 180
   );
@@ -80,6 +113,40 @@ function isRouteResult(value: unknown, mode: TravelMode): value is RouteResult {
   );
 }
 
+function isEndpoint(value: unknown): value is Endpoint {
+  return value === "origin" || value === "destination";
+}
+
+function isMapCenter(value: unknown): value is MapCenter {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.label === "string" &&
+    isCoordinate(value.lat) && value.lat >= -90 && value.lat <= 90 &&
+    isCoordinate(value.lon) && value.lon >= -180 && value.lon <= 180 &&
+    typeof value.zoom === "number" && Number.isFinite(value.zoom) && value.zoom >= 2 && value.zoom <= 19
+  );
+}
+
+function isPinSelectionDetails(value: unknown): value is PinSelectionDetails {
+  if (!isRecord(value) || !Array.isArray(value.unresolvedEndpoints) || !isRecord(value.resolvedEndpoints)) return false;
+  const unresolved = value.unresolvedEndpoints;
+  if (
+    unresolved.length < 1 || unresolved.length > 2 ||
+    unresolved.some((endpoint) => !isEndpoint(endpoint)) || new Set(unresolved).size !== unresolved.length
+  ) return false;
+  if (Object.entries(value.resolvedEndpoints).some(([endpoint, place]) => !isEndpoint(endpoint) || !isPlaceResult(place))) return false;
+  return value.mapCenter === null || isMapCenter(value.mapCenter);
+}
+
+function pinSelectionResponse(payload: unknown): { message: string; details: PinSelectionDetails } | null {
+  if (!isRecord(payload) || !isRecord(payload.error) || payload.error.code !== "place_not_found") return null;
+  if (!isPinSelectionDetails(payload.error.details)) return null;
+  const message = typeof payload.error.message === "string" && payload.error.message.trim()
+    ? payload.error.message.trim()
+    : "OpenStreetMap couldn't find every route location. Confirm the missing point on the map.";
+  return { message, details: payload.error.details };
+}
+
 function responseError(payload: unknown, fallback: string) {
   if (!isRecord(payload) || !isRecord(payload.error)) return fallback;
   return typeof payload.error.message === "string" && payload.error.message.trim()
@@ -100,6 +167,22 @@ function formatDuration(durationSeconds: number) {
   return minutes ? `${hours} h ${minutes} min` : `${hours} h`;
 }
 
+function parseCoordinates(latitude: string, longitude: string): Coordinates | null {
+  if (!latitude.trim() || !longitude.trim()) return null;
+  const lat = Number(latitude);
+  const lon = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon };
+}
+
+function sameCoordinates(left: Coordinates | undefined | null, right: Coordinates | undefined | null) {
+  return Boolean(left && right && left.lat === right.lat && left.lon === right.lon);
+}
+
+function endpointLabel(endpoint: Endpoint) {
+  return endpoint === "origin" ? "Start point" : "Destination";
+}
+
 function tooltipText(text: string) {
   const element = document.createElement("span");
   element.textContent = text;
@@ -117,43 +200,159 @@ function markerIcon(L: typeof import("leaflet"), letter: string, variant: "start
 
 export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }) {
   const [mode, setMode] = useState<TravelMode>(widget.mode);
-  const [routeData, setRouteData] = useState<RouteResult | null>(null);
+  const [routeDataSession, setRouteDataSession] = useState<RouteResultSession | null>(null);
   const [status, setStatus] = useState<RouteStatus>("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const [tileError, setTileError] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const [pinSelectionSession, setPinSelectionSession] = useState<PinSelectionSession | null>(null);
+  const [confirmedCoordinatesSession, setConfirmedCoordinatesSession] = useState<PendingRouteCoordinates | null>(null);
+  const [activeEndpoint, setActiveEndpoint] = useState<Endpoint | null>(null);
+  const [draftCoordinate, setDraftCoordinate] = useState<Coordinates | null>(null);
+  const [draftNeedsConfirmation, setDraftNeedsConfirmation] = useState<Partial<Record<Endpoint, boolean>>>({});
+  const [latitudeInput, setLatitudeInput] = useState("");
+  const [longitudeInput, setLongitudeInput] = useState("");
+  const [draftsByEndpoint, setDraftsByEndpoint] = useState<Partial<Record<Endpoint, PinDraft>>>({});
+  const [inputGeneration, setInputGeneration] = useState(0);
+  const requestContextRef = useRef({ origin: widget.origin, destination: widget.destination, mode, revision: retryCount, generation: 0 });
+  const requestCoordinatesRef = useRef<PendingRouteCoordinates | null>(null);
+  const routeInputsRef = useRef({ origin: widget.origin, destination: widget.destination });
+  const renderContext = {
+    origin: widget.origin,
+    destination: widget.destination,
+    mode,
+    revision: retryCount,
+    generation: inputGeneration,
+  };
+  const routeData = routeDataSession && routeSessionMatches(routeDataSession, renderContext, {
+    matchMode: true,
+    matchRevision: true,
+  })
+    ? routeDataSession.route
+    : null;
+  const currentPinSession = pinSelectionSession !== null && routeSessionMatches(pinSelectionSession, renderContext);
+  const pinSelection = currentPinSession ? pinSelectionSession?.details ?? null : null;
+  const confirmedCoordinates = coordinatesForCurrentRoute(
+    confirmedCoordinatesSession,
+    widget.origin,
+    widget.destination,
+    renderContext.generation,
+  ) ?? {};
   const mapId = useId();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leafletMapRef = useRef<LeafletMap | null>(null);
 
+  useLayoutEffect(() => {
+    const nextInputs = { origin: widget.origin, destination: widget.destination };
+    const currentContext = requestContextRef.current;
+    const nextContext = routeContextForInputs(currentContext, nextInputs, mode, retryCount);
+    requestContextRef.current = nextContext;
+    if (nextContext.generation !== currentContext.generation) setInputGeneration(nextContext.generation);
+  }, [widget.origin, widget.destination, mode, retryCount]);
+
+  useEffect(() => {
+    const previous = routeInputsRef.current;
+    if (previous.origin === widget.origin && previous.destination === widget.destination) return;
+    routeInputsRef.current = { origin: widget.origin, destination: widget.destination };
+    requestCoordinatesRef.current = null;
+    setRouteDataSession(null);
+    setPinSelectionSession(null);
+    setConfirmedCoordinatesSession(null);
+    setActiveEndpoint(null);
+    setDraftCoordinate(null);
+    setDraftNeedsConfirmation({});
+    setDraftsByEndpoint({});
+    setLatitudeInput("");
+    setLongitudeInput("");
+    setErrorMessage("");
+    setTileError(false);
+    setStatus("loading");
+  }, [widget.origin, widget.destination]);
+
   useEffect(() => {
     const controller = new AbortController();
+    const requestContext = { ...requestContextRef.current };
+    const isCurrentRequest = () => routeRequestContextMatches(requestContext, requestContextRef.current);
+    const requestBody: Record<string, unknown> = {
+      origin: requestContext.origin,
+      destination: requestContext.destination,
+      mode: requestContext.mode,
+    };
+    const requestCoordinates = coordinatesForCurrentRoute(
+      requestCoordinatesRef.current,
+      widget.origin,
+      widget.destination,
+      requestContext.generation,
+    );
+    if (requestCoordinatesRef.current && !requestCoordinates) requestCoordinatesRef.current = null;
+    if (requestCoordinates && Object.keys(requestCoordinates).length > 0) {
+      requestBody.confirmedCoordinates = requestCoordinates;
+    }
 
     void fetch("/api/map-route", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ origin: widget.origin, destination: widget.destination, mode }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     })
       .then(async (response) => {
         const payload: unknown = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(responseError(payload, "Could not calculate that route."));
-        if (!isRouteResult(payload, mode)) throw new Error("The map service returned an invalid route.");
-        return payload;
+        if (!response.ok) {
+          const pinResponse = pinSelectionResponse(payload);
+          if (pinResponse) return { kind: "pin" as const, ...pinResponse };
+          throw new Error(responseError(payload, "Could not calculate that route."));
+        }
+        if (!isRouteResult(payload, requestContext.mode)) throw new Error("The map service returned an invalid route.");
+        return { kind: "route" as const, route: payload };
       })
-      .then((route) => {
-        if (controller.signal.aborted) return;
-        setRouteData(route);
+      .then((result) => {
+        if (controller.signal.aborted || !isCurrentRequest()) return;
+        if (result.kind === "pin") {
+          requestCoordinatesRef.current = null;
+          setRouteDataSession(null);
+          setPinSelectionSession({
+            origin: requestContext.origin,
+            destination: requestContext.destination,
+            generation: requestContext.generation,
+            details: result.details,
+          });
+          setConfirmedCoordinatesSession(null);
+          setDraftNeedsConfirmation({});
+          setDraftsByEndpoint({});
+          setActiveEndpoint(result.details.unresolvedEndpoints[0] ?? null);
+          setDraftCoordinate(null);
+          setLatitudeInput("");
+          setLongitudeInput("");
+          setErrorMessage(result.message);
+          setStatus("pinning");
+          return;
+        }
+        requestCoordinatesRef.current = null;
+        setRouteDataSession({
+          origin: requestContext.origin,
+          destination: requestContext.destination,
+          mode: requestContext.mode,
+          revision: requestContext.revision,
+          generation: requestContext.generation,
+          route: result.route,
+        });
+        setPinSelectionSession(null);
+        setConfirmedCoordinatesSession(null);
+        setDraftNeedsConfirmation({});
+        setDraftsByEndpoint({});
+        setActiveEndpoint(null);
+        setDraftCoordinate(null);
+        setErrorMessage("");
         setStatus("ready");
       })
       .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || !isCurrentRequest()) return;
         setErrorMessage(error instanceof Error ? error.message : "Could not calculate that route.");
         setStatus("error");
       });
 
     return () => controller.abort();
-  }, [widget.origin, widget.destination, mode, retryCount]);
+  }, [widget.origin, widget.destination, retryCount]);
 
   useEffect(() => {
     if (!routeData || !mapContainerRef.current) return;
@@ -239,20 +438,169 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
 
   function chooseMode(nextMode: TravelMode) {
     if (nextMode === mode) return;
-    setRouteData(null);
+    const confirmedPins = coordinatesForCurrentRoute(
+      requestCoordinatesRef.current,
+      widget.origin,
+      widget.destination,
+      requestContextRef.current.generation,
+    );
+    const pinsMatchCurrentConfirmation = Boolean(
+      pinSelection &&
+      allPinsConfirmed &&
+      confirmedPins &&
+      Object.keys(confirmedPins).length === pinSelection.unresolvedEndpoints.length &&
+      pinSelection.unresolvedEndpoints.every((endpoint) =>
+        sameCoordinates(confirmedPins[endpoint], confirmedCoordinates[endpoint])
+      ),
+    );
+    if (pinSelection && status === "loading" && !pinsMatchCurrentConfirmation) return;
+    if (status === "error" && !pinSelection) {
+      requestContextRef.current = { ...requestContextRef.current, origin: widget.origin, destination: widget.destination, mode: nextMode, revision: retryCount };
+      setMode(nextMode);
+      return;
+    }
+    const retryPinRoute = Boolean(pinSelection && status === "loading" && pinsMatchCurrentConfirmation);
+    const revision = pinSelection && !retryPinRoute ? retryCount : retryCount + 1;
+    requestContextRef.current = { ...requestContextRef.current, origin: widget.origin, destination: widget.destination, mode: nextMode, revision };
+    setMode(nextMode);
+    if (pinSelection && !retryPinRoute) return;
+
+    if (!pinSelection) {
+      const currentPins = coordinatesForCurrentRoute(
+        requestCoordinatesRef.current,
+        widget.origin,
+        widget.destination,
+        requestContextRef.current.generation,
+      );
+      const pinnedEndpoints: Partial<Record<Endpoint, Coordinates>> = { ...currentPins };
+      if (!pinnedEndpoints.origin && routeData?.origin.source === "map_pin") {
+        pinnedEndpoints.origin = { lat: routeData.origin.lat, lon: routeData.origin.lon };
+      }
+      if (!pinnedEndpoints.destination && routeData?.destination.source === "map_pin") {
+        pinnedEndpoints.destination = { lat: routeData.destination.lat, lon: routeData.destination.lon };
+      }
+      requestCoordinatesRef.current = Object.keys(pinnedEndpoints).length > 0
+        ? {
+            origin: widget.origin,
+            destination: widget.destination,
+            generation: requestContextRef.current.generation,
+            coordinates: pinnedEndpoints,
+          }
+        : null;
+    }
+    setRouteDataSession(null);
     setStatus("loading");
     setErrorMessage("");
     setTileError(false);
-    setMode(nextMode);
+    setRetryCount(revision);
   }
 
   function retryRoute() {
-    setRouteData(null);
+    if (pinSelection) {
+      if (!allPinsConfirmed) return;
+      requestCoordinatesRef.current = {
+        origin: widget.origin,
+        destination: widget.destination,
+        generation: requestContextRef.current.generation,
+        coordinates: { ...confirmedCoordinates },
+      };
+    }
+    requestContextRef.current = { ...requestContextRef.current, revision: retryCount + 1 };
+    setRouteDataSession(null);
     setStatus("loading");
     setErrorMessage("");
     setTileError(false);
     setRetryCount((count) => count + 1);
   }
+
+  function updateDraftCoordinates(latitude: string, longitude: string) {
+    const endpoint = activeEndpoint;
+    if (!currentPinSession || status === "loading" || !endpoint) return;
+    const coordinate = parseCoordinates(latitude, longitude);
+    setDraftNeedsConfirmation((current) => ({ ...current, [endpoint]: true }));
+    setLatitudeInput(latitude);
+    setLongitudeInput(longitude);
+    setDraftCoordinate(coordinate);
+    setDraftsByEndpoint((current) => ({ ...current, [endpoint]: { coordinate, latitude, longitude } }));
+  }
+
+  function choosePinEndpoint(endpoint: Endpoint) {
+    if (status === "loading" || !currentPinSession || !pinSelection?.unresolvedEndpoints.includes(endpoint)) return;
+    setActiveEndpoint(endpoint);
+    const savedDraft = draftsByEndpoint[endpoint];
+    const confirmed = confirmedCoordinates[endpoint] ?? null;
+    const nextDraft = savedDraft ?? {
+      coordinate: confirmed,
+      latitude: confirmed ? String(confirmed.lat) : "",
+      longitude: confirmed ? String(confirmed.lon) : "",
+    };
+    setDraftCoordinate(nextDraft.coordinate);
+    setLatitudeInput(nextDraft.latitude);
+    setLongitudeInput(nextDraft.longitude);
+  }
+
+  function setDraftFromMap(point: Coordinates) {
+    const endpoint = activeEndpoint;
+    if (status === "loading" || !currentPinSession || !endpoint || !isValidCoordinates(point)) return;
+    const latitude = point.lat.toFixed(6);
+    const longitude = point.lon.toFixed(6);
+    setDraftNeedsConfirmation((current) => ({ ...current, [endpoint]: true }));
+    setDraftCoordinate(point);
+    setLatitudeInput(latitude);
+    setLongitudeInput(longitude);
+    setDraftsByEndpoint((current) => ({ ...current, [endpoint]: { coordinate: point, latitude, longitude } }));
+  }
+
+  function confirmActivePin() {
+    if (status === "loading" || !currentPinSession || !activeEndpoint || !draftCoordinate || !pinSelection?.unresolvedEndpoints.includes(activeEndpoint)) return;
+    const activeDraft = { coordinate: draftCoordinate, latitude: latitudeInput, longitude: longitudeInput };
+    const nextCoordinates = { ...confirmedCoordinates, [activeEndpoint]: draftCoordinate };
+    setDraftsByEndpoint((current) => ({ ...current, [activeEndpoint]: activeDraft }));
+    setConfirmedCoordinatesSession({
+      origin: widget.origin,
+      destination: widget.destination,
+      generation: requestContextRef.current.generation,
+      coordinates: nextCoordinates,
+    });
+    setDraftNeedsConfirmation((current) => ({ ...current, [activeEndpoint]: false }));
+    const nextEndpoint = pinSelection.unresolvedEndpoints.find(
+      (endpoint) => endpoint !== activeEndpoint && !nextCoordinates[endpoint],
+    );
+    if (nextEndpoint) {
+      setActiveEndpoint(nextEndpoint);
+      const savedDraft = draftsByEndpoint[nextEndpoint];
+      const nextPoint = savedDraft ? savedDraft.coordinate : nextCoordinates[nextEndpoint] ?? null;
+      setDraftCoordinate(nextPoint);
+      setLatitudeInput(savedDraft ? savedDraft.latitude : nextPoint ? String(nextPoint.lat) : "");
+      setLongitudeInput(savedDraft ? savedDraft.longitude : nextPoint ? String(nextPoint.lon) : "");
+    }
+  }
+
+  const allPinsConfirmed = Boolean(
+    pinSelection && pinSelection.unresolvedEndpoints.every((endpoint) =>
+      confirmedCoordinates[endpoint] &&
+      !draftNeedsConfirmation[endpoint] &&
+      (endpoint !== activeEndpoint || sameCoordinates(draftCoordinate, confirmedCoordinates[endpoint]))
+    ),
+  );
+
+  function calculateRouteWithPins() {
+    if (!currentPinSession || !pinSelection || !allPinsConfirmed) return;
+    requestContextRef.current = { ...requestContextRef.current, revision: retryCount + 1 };
+    requestCoordinatesRef.current = {
+      origin: widget.origin,
+      destination: widget.destination,
+      generation: requestContextRef.current.generation,
+      coordinates: { ...confirmedCoordinates },
+    };
+    setRouteDataSession(null);
+    setStatus("loading");
+    setErrorMessage("");
+    setTileError(false);
+    setRetryCount((count) => count + 1);
+  }
+
+  const selectedEndpoint = activeEndpoint ?? pinSelection?.unresolvedEndpoints[0] ?? null;
 
   return (
     <section className="my-4 w-full min-w-0 overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm" aria-label="Route planner">
@@ -314,26 +662,149 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
         </div>
       </div>
 
+      {pinSelection ? (
+        <div className="grid min-w-0 gap-3 border-b border-border bg-card p-4">
+          <div>
+            <h4 className="text-sm font-semibold text-foreground">Confirm locations on the map</h4>
+            <p className="mt-1 text-sm text-muted-foreground">{errorMessage}</p>
+            <p className="mt-1 text-sm text-muted-foreground">Choose each missing stop, place its pin on the map or enter coordinates, then confirm it. No route is calculated until you confirm the pins and continue.</p>
+          </div>
+          {pinSelection.mapCenter ? (
+            <p className="text-xs leading-5 text-muted-foreground">
+              Map centered near {pinSelection.mapCenter.label} for pin placement. The center itself is not assumed to be a route stop; only independently resolved locations and pins you confirm are used.
+            </p>
+          ) : (
+            <p className="text-xs leading-5 text-muted-foreground">The map center is only for pin placement. Pan and zoom to the right area, or enter coordinates directly.</p>
+          )}
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Route locations that need pins">
+            {pinSelection.unresolvedEndpoints.map((endpoint) => {
+              const confirmed = confirmedCoordinates[endpoint];
+              const isDraftDifferent = draftNeedsConfirmation[endpoint] || (
+                endpoint === selectedEndpoint && !sameCoordinates(draftCoordinate, confirmed)
+              );
+              return (
+                <Button
+                  key={endpoint}
+                  type="button"
+                  variant={selectedEndpoint === endpoint ? "default" : "outline"}
+                  className="min-h-11 min-w-0 whitespace-normal text-center"
+                  aria-pressed={selectedEndpoint === endpoint}
+                  onClick={() => choosePinEndpoint(endpoint)}
+                  disabled={status === "loading"}
+                >
+                  {endpointLabel(endpoint)} · {confirmed && !isDraftDifferent ? "pin confirmed" : "needs pin"}
+                </Button>
+              );
+            })}
+          </div>
+          {selectedEndpoint ? (
+            <div className="grid gap-3">
+              <p className="text-sm text-foreground" aria-live="polite">
+                Place the {endpointLabel(selectedEndpoint).toLowerCase()} pin. Click the map or type its latitude and longitude.
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
+                  <span>{endpointLabel(selectedEndpoint)} latitude</span>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    min={-90}
+                    max={90}
+                    step="any"
+                    className="h-11 min-h-11 w-full min-w-0 rounded-md text-sm"
+                    value={latitudeInput}
+                    onChange={(event) => updateDraftCoordinates(event.target.value, longitudeInput)}
+                    aria-label={`${endpointLabel(selectedEndpoint)} latitude`}
+                    disabled={status === "loading"}
+                  />
+                </label>
+                <label className="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
+                  <span>{endpointLabel(selectedEndpoint)} longitude</span>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    min={-180}
+                    max={180}
+                    step="any"
+                    className="h-11 min-h-11 w-full min-w-0 rounded-md text-sm"
+                    value={longitudeInput}
+                    onChange={(event) => updateDraftCoordinates(latitudeInput, event.target.value)}
+                    aria-label={`${endpointLabel(selectedEndpoint)} longitude`}
+                    disabled={status === "loading"}
+                  />
+                </label>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 w-full whitespace-normal text-center sm:w-auto"
+                  onClick={confirmActivePin}
+                  disabled={!draftCoordinate || status === "loading"}
+                >
+                  Confirm {selectedEndpoint === "origin" ? "start" : "destination"} pin
+                </Button>
+                <Button
+                  type="button"
+                  className="min-h-11 w-full whitespace-normal text-center sm:w-auto"
+                  onClick={calculateRouteWithPins}
+                  disabled={!allPinsConfirmed || status === "loading"}
+                >
+                  Calculate route with confirmed pins
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {status === "loading" ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+              <LoaderCircle className="size-4 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
+              Calculating route from the confirmed locations…
+            </p>
+          ) : null}
+          {status === "error" ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3" role="alert">
+              <p className="min-w-0 flex-1 text-sm text-foreground">{errorMessage}</p>
+              <Button type="button" variant="outline" className="min-h-11" onClick={retryRoute} disabled={!allPinsConfirmed}>
+                <RotateCcw className="size-4" aria-hidden="true" />
+                Try route again
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="relative h-[260px] w-full bg-muted sm:h-[320px]">
-        <div
-          ref={mapContainerRef}
-          id={mapId}
-          className="absolute inset-0"
-          role="region"
-          aria-label={`Interactive route map from ${routeData?.origin.label ?? widget.origin} to ${routeData?.destination.label ?? widget.destination}`}
-          aria-roledescription="map"
-        />
+        {pinSelection ? (
+          <RoutePinMap
+            center={pinSelection.mapCenter}
+            resolvedEndpoints={pinSelection.resolvedEndpoints}
+            confirmedCoordinates={confirmedCoordinates}
+            activeEndpoint={activeEndpoint}
+            draftCoordinate={draftCoordinate}
+            onMapPoint={setDraftFromMap}
+            onTileError={() => setTileError(true)}
+          />
+        ) : (
+          <div
+            ref={mapContainerRef}
+            id={mapId}
+            className="absolute inset-0"
+            role="region"
+            aria-label={`Interactive route map from ${routeData?.origin.label ?? widget.origin} to ${routeData?.destination.label ?? widget.destination}`}
+            aria-roledescription="map"
+          />
+        )}
 
         {status === "loading" ? (
           <div className="pointer-events-none absolute inset-0 z-[500] flex items-center justify-center bg-muted/80" role="status">
             <div className="flex items-center gap-2 rounded-full border border-border bg-card/95 px-4 py-2 text-sm text-muted-foreground shadow-sm">
               <LoaderCircle className="size-4 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
-              Finding the route…
+              {pinSelection ? "Routing from the confirmed locations…" : "Finding the route…"}
             </div>
           </div>
         ) : null}
 
-        {status === "error" ? (
+        {status === "error" && !pinSelection ? (
           <div className="absolute inset-0 z-[500] flex items-center justify-center bg-muted/95 p-5">
             <div className="max-w-sm text-center">
               <p className="text-sm font-medium text-foreground">Couldn’t load this route</p>
@@ -378,9 +849,9 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
           </div>
         ) : null}
 
-        {status === "ready" && tileError ? (
+        {tileError && (status === "ready" || Boolean(pinSelection)) ? (
           <p className="absolute left-3 top-3 z-[1000] rounded-md border border-border bg-card/95 px-3 py-2 text-xs text-muted-foreground shadow-sm" role="status">
-            Map tiles are unavailable; the route is still shown.
+            {pinSelection ? "Map tiles are unavailable; use the coordinate fields to set pins." : "Map tiles are unavailable; the route is still shown."}
           </p>
         ) : null}
       </div>
@@ -406,10 +877,18 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
       ) : null}
 
       <p className="border-t border-border px-4 py-2 text-xs leading-4 text-muted-foreground">
-        Route lookup sends these locations to OpenStreetMap and OSRM.
+        Place lookup sends text to OpenStreetMap. Routing sends resolved or confirmed coordinates to OSRM; map tiles are served by OpenStreetMap.
       </p>
       <p className="sr-only" aria-live="polite" aria-atomic="true">
-        {status === "loading" ? "Calculating route." : status === "error" ? errorMessage : routeData ? `${formatDistance(routeData.distanceMeters)} route loaded.` : ""}
+        {status === "loading"
+          ? "Calculating route."
+          : pinSelection
+            ? "Confirm the missing route locations with map pins or coordinates."
+            : status === "error"
+              ? errorMessage
+              : routeData
+                ? `${formatDistance(routeData.distanceMeters)} route loaded.`
+                : ""}
       </p>
     </section>
   );

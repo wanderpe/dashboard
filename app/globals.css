@@ -228,6 +228,10 @@
   background: #203642;
 }
 
+.cartman-route-marker--draft {
+  background: #986900;
+}
+
 .leaflet-marker-icon:focus-visible {
   outline: 3px solid var(--ring);
   outline-offset: 3px;
