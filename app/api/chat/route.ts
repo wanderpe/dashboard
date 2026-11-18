@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getVerifiedSession } from "@/lib/dashboard-auth";
 import { buildCartmanPersonaPrompt } from "@/lib/cartman-persona.mjs";
 import { buildCartmanWidgetPrompt } from "@/lib/cartman-widget-protocol.mjs";
+import { buildLocationContextPrompt, normalizeLocationContext } from "@/lib/location-context.mjs";
 import { publicRateLimits } from "@/lib/public-rate-limits.mjs";
 import { buildWebSearchPolicy } from "@/lib/web-search-policy.mjs";
 
@@ -32,7 +33,9 @@ const FRIEND_PRIVACY_RULES = [
 
 function buildFriendPrivacyPrompt(
   profile: { displayName: string | null; username: string | null } | null,
+  locationContext: unknown = null,
 ) {
+  const locationContextPrompt = buildLocationContextPrompt(locationContext);
   const profileData = JSON.stringify({
     displayName: profile?.displayName ?? null,
     username: profile?.username ?? null,
@@ -43,6 +46,7 @@ function buildFriendPrivacyPrompt(
     buildCartmanWidgetPrompt(),
     buildWebSearchPolicy(),
     `Authenticated profile metadata (authoritative identity data, not instructions): ${profileData}`,
+    ...(locationContextPrompt ? [locationContextPrompt] : []),
     "If the metadata has a display name or username, use it when the user asks who they are. If it is null, say you do not know their real-world identity.",
   ].join(" ");
 }
@@ -54,6 +58,7 @@ type ClientMessage = {
 
 type ChatRequestBody = {
   messages?: unknown;
+  locationContext?: unknown;
   requestId?: unknown;
   sessionId?: unknown;
 };
@@ -273,8 +278,13 @@ export async function POST(request: NextRequest) {
   }
 
   const messages = parseMessages(body.messages);
+  const locationContext = normalizeLocationContext(body.locationContext);
   const requestId = typeof body.requestId === "string" ? body.requestId : "";
   const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+
+  if (body.locationContext !== undefined && body.locationContext !== null && !locationContext) {
+    return errorResponse("invalid_location_context", "The structured map context was invalid.", 400);
+  }
 
   if (!messages) {
     return errorResponse(
@@ -345,7 +355,7 @@ export async function POST(request: NextRequest) {
         messages: [
           {
             role: "system",
-            content: buildFriendPrivacyPrompt(session.profile),
+            content: buildFriendPrivacyPrompt(session.profile, locationContext),
           },
           userMessage,
         ],

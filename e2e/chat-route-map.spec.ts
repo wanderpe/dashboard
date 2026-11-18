@@ -80,13 +80,18 @@ test("renders an interactive, responsive route map from Cartman's validated widg
             : "Seattle, Washington, United States",
           lat: 47.6062,
           lon: -122.3321,
+          source: "nominatim",
+          resolutionState: "ROUTE_VALIDATED",
+          userConfirmed: false,
         },
-        destination: { label: "Portland, Oregon, United States", lat: 45.5152, lon: -122.6784 },
+        destination: { label: "Portland, Oregon, United States", lat: 45.5152, lon: -122.6784, source: "nominatim", resolutionState: "ROUTE_VALIDATED", userConfirmed: false },
         mode: request.mode,
-        distanceMeters: 280_000,
-        durationSeconds: 10_000,
+        straightLineDistanceMeters: 250_000,
+        resolutionState: "ROUTE_VALIDATED",
+        roadDistanceMeters: 280_000,
+        estimatedTravelTimeSeconds: 10_000,
         geometry: [[47.6062, -122.3321], [46.5, -122.45], [45.5152, -122.6784]],
-        steps: [{ instruction: "Start on I-5", distanceMeters: 5_000 }],
+        steps: [{ instruction: "Start on I-5", roadDistanceMeters: 5_000 }],
       },
     });
   });
@@ -98,7 +103,11 @@ test("renders an interactive, responsive route map from Cartman's validated widg
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(page.getByRole("region", { name: /Interactive route map/ })).toBeVisible();
+  await expect(page.getByText("250 km", { exact: true })).toBeVisible();
+  await expect(page.getByText("straight-line distance", { exact: true })).toBeVisible();
   await expect(page.getByText("280 km", { exact: true })).toBeVisible();
+  await expect(page.getByText("road distance", { exact: true })).toBeVisible();
+  await expect(page.getByText("estimated travel time · no live traffic", { exact: true })).toBeVisible();
   await expect(page.getByText(/Place lookup sends text to OpenStreetMap.*coordinates to OSRM/i)).toBeVisible();
   const mobileCard = page.getByRole("region", { name: "Route planner" });
   const mobileCardBounds = await mobileCard.boundingBox();
@@ -229,16 +238,22 @@ test("lets users confirm unmapped endpoints with coordinate fields and map pins 
           lat: coordinates.origin.lat,
           lon: coordinates.origin.lon,
           source: "map_pin",
+          resolutionState: "ROUTE_VALIDATED",
+          userConfirmed: true,
         },
         destination: {
           label: `User-confirmed pin for ${request.destination}`,
           lat: coordinates.destination.lat,
           lon: coordinates.destination.lon,
           source: "map_pin",
+          resolutionState: "ROUTE_VALIDATED",
+          userConfirmed: true,
         },
         mode: request.mode,
-        distanceMeters: 2_300,
-        durationSeconds: 420,
+        resolutionState: "ROUTE_VALIDATED",
+        straightLineDistanceMeters: 900,
+        roadDistanceMeters: 2_300,
+        estimatedTravelTimeSeconds: 420,
         geometry: [
           [coordinates.origin.lat, coordinates.origin.lon],
           [coordinates.destination.lat, coordinates.destination.lon],
@@ -381,15 +396,21 @@ test("retries a pin-backed route when the travel mode changes in flight", async 
             label: `User-confirmed pin for ${request.origin}`,
             ...coordinates.origin,
             source: "map_pin",
+          resolutionState: "ROUTE_VALIDATED",
+          userConfirmed: true,
           },
           destination: {
             label: `User-confirmed pin for ${request.destination}`,
             ...coordinates.destination,
             source: "map_pin",
+          resolutionState: "ROUTE_VALIDATED",
+          userConfirmed: true,
           },
           mode: request.mode,
-          distanceMeters: 2_300,
-          durationSeconds: request.mode === "cycling" ? 480 : 420,
+          resolutionState: "ROUTE_VALIDATED",
+        straightLineDistanceMeters: 900,
+        roadDistanceMeters: 2_300,
+          estimatedTravelTimeSeconds: request.mode === "cycling" ? 480 : 420,
           geometry: [
             [coordinates.origin.lat, coordinates.origin.lon],
             [coordinates.destination.lat, coordinates.destination.lon],
@@ -540,11 +561,13 @@ test("does not retry stale pins after a failed route when pins change before Cal
     };
     await route.fulfill({
       json: {
-        origin: { label: "Confirmed start", ...coordinates.origin, source: "map_pin" },
-        destination: { label: "Confirmed destination", ...coordinates.destination, source: "map_pin" },
+        origin: { label: "Confirmed start", ...coordinates.origin, source: "map_pin", resolutionState: "ROUTE_VALIDATED", userConfirmed: true },
+        destination: { label: "Confirmed destination", ...coordinates.destination, source: "map_pin", resolutionState: "ROUTE_VALIDATED", userConfirmed: true },
         mode: request.mode,
-        distanceMeters: 2_300,
-        durationSeconds: 420,
+        resolutionState: "ROUTE_VALIDATED",
+        straightLineDistanceMeters: 900,
+        roadDistanceMeters: 2_300,
+        estimatedTravelTimeSeconds: 420,
         geometry: [[coordinates.origin.lat, coordinates.origin.lon], [coordinates.destination.lat, coordinates.destination.lon]],
         steps: [],
       },
@@ -628,11 +651,13 @@ test("changing mode after a route error does not silently retry", async ({ page 
     }
     await route.fulfill({
       json: {
-        origin: { label: "Seattle, Washington, United States", lat: 47.6062, lon: -122.3321 },
-        destination: { label: "Portland, Oregon, United States", lat: 45.5152, lon: -122.6784 },
+        origin: { label: "Seattle, Washington, United States", lat: 47.6062, lon: -122.3321, source: "nominatim", resolutionState: "ROUTE_VALIDATED", userConfirmed: false },
+        destination: { label: "Portland, Oregon, United States", lat: 45.5152, lon: -122.6784, source: "nominatim", resolutionState: "ROUTE_VALIDATED", userConfirmed: false },
         mode: request.mode,
-        distanceMeters: 280_000,
-        durationSeconds: 10_000,
+        straightLineDistanceMeters: 250_000,
+        resolutionState: "ROUTE_VALIDATED",
+        roadDistanceMeters: 280_000,
+        estimatedTravelTimeSeconds: 10_000,
         geometry: [[47.6062, -122.3321], [45.5152, -122.6784]],
         steps: [],
       },
@@ -715,11 +740,13 @@ test("changing mode repeatedly preserves confirmed pins and ignores the late pri
     const destination = coordinates?.destination ?? { lat: 10.322, lon: 123.942 };
     const fulfill = () => route.fulfill({
       json: {
-        origin: { label: "Confirmed start", ...origin, ...(coordinates ? { source: "map_pin" } : {}) },
-        destination: { label: "Confirmed destination", ...destination, ...(coordinates ? { source: "map_pin" } : {}) },
+        origin: { label: "Confirmed start", ...origin, source: coordinates ? "map_pin" : "nominatim", resolutionState: "ROUTE_VALIDATED", userConfirmed: Boolean(coordinates) },
+        destination: { label: "Confirmed destination", ...destination, source: coordinates ? "map_pin" : "nominatim", resolutionState: "ROUTE_VALIDATED", userConfirmed: Boolean(coordinates) },
         mode: request.mode,
-        distanceMeters: 2_300,
-        durationSeconds: request.mode === "walking" ? 360 : request.mode === "cycling" ? 600 : 420,
+        resolutionState: "ROUTE_VALIDATED",
+        straightLineDistanceMeters: 900,
+        roadDistanceMeters: 2_300,
+        estimatedTravelTimeSeconds: request.mode === "walking" ? 360 : request.mode === "cycling" ? 600 : 420,
         geometry: [[origin.lat, origin.lon], [destination.lat, destination.lon]],
         steps: [],
       },
@@ -872,4 +899,96 @@ test("labels a reverted confirmed coordinate as needing reconfirmation", async (
   await expect(page.getByRole("spinbutton", { name: "Start point longitude" })).toHaveValue("123.941");
   await expect(page.getByRole("button", { name: "Calculate route with confirmed pins" })).toBeDisabled();
   expect(routeRequests).toHaveLength(1);
+});
+
+test("offers ambiguous geocoder matches and routes only after a user selects one", async ({ page }) => {
+  const routeRequests: Array<Record<string, unknown>> = [];
+  await mockAuthenticatedSession(page);
+  const answer = [
+    "I found more than one possible destination.",
+    "```cartman-widget",
+    JSON.stringify({ type: "route-map", origin: "Mandaue City Hall, Cebu", destination: "Anytime Fitness Oakridge, Mandaue City", mode: "driving" }),
+    "```",
+  ].join("\n");
+  await page.route("**/api/chat", (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+      body: [
+        sseFrame({ choices: [{ delta: { content: answer }, finish_reason: null }] }),
+        sseFrame({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    }),
+  );
+  await page.route("**/api/map-route", async (route) => {
+    const request = route.request().postDataJSON() as Record<string, unknown>;
+    routeRequests.push(request);
+    if (!request.confirmedCoordinates) {
+      await route.fulfill({
+        status: 422,
+        json: {
+          error: {
+            code: "place_ambiguous",
+            message: "OpenStreetMap found multiple possible matches for the destination. Choose a match or confirm the missing point on the map to continue.",
+            details: {
+              unresolvedEndpoints: ["destination"],
+              resolvedEndpoints: {
+                origin: { label: "Mandaue City Hall, Cebu, Philippines", lat: 10.323, lon: 123.922, source: "nominatim", resolutionState: "RESOLVED", userConfirmed: false },
+              },
+              resolutionStates: { origin: "RESOLVED", destination: "FAILED" },
+              candidateMatches: {
+                destination: [
+                  { label: "Anytime Fitness Oakridge, Oakridge Business Park, Mandaue City", lat: 10.33, lon: 123.91, source: "nominatim", resolutionState: "RESOLVED", userConfirmed: false },
+                  { label: "Anytime Fitness Oakridge, A.S. Fortuna Street, Mandaue City", lat: 10.34, lon: 123.92, source: "nominatim", resolutionState: "RESOLVED", userConfirmed: false },
+                ],
+              },
+              candidateMatchesMayBeTruncated: { destination: false },
+              mapCenter: { label: "Mandaue City Hall, Cebu, Philippines", lat: 10.323, lon: 123.922, zoom: 13 },
+            },
+          },
+        },
+      });
+      return;
+    }
+    const coordinates = request.confirmedCoordinates as { destination: { lat: number; lon: number } };
+    await route.fulfill({
+      json: {
+        origin: { label: "Mandaue City Hall, Cebu, Philippines", lat: 10.323, lon: 123.922, source: "nominatim", resolutionState: "ROUTE_VALIDATED", userConfirmed: false },
+        destination: { label: "User-confirmed pin for Anytime Fitness Oakridge, Mandaue City", ...coordinates.destination, source: "map_pin", resolutionState: "USER_CONFIRMED", userConfirmed: true },
+        mode: "driving",
+        straightLineDistanceMeters: 2_000,
+        roadDistanceMeters: 2_800,
+        estimatedTravelTimeSeconds: 420,
+        resolutionState: "ROUTE_VALIDATED",
+        geometry: [[10.323, 123.922], [coordinates.destination.lat, coordinates.destination.lon]],
+        steps: [],
+      },
+    });
+  });
+
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "Message Eric" }).fill("Route from Mandaue City Hall to Anytime Fitness Oakridge in Mandaue City.");
+  await page.getByRole("button", { name: "Send" }).click();
+  const planner = page.getByRole("region", { name: "Route planner" });
+  await expect(planner.getByText("Confirm locations on the map", { exact: true })).toBeVisible();
+  await expect(planner.getByText("Start point · RESOLVED", { exact: true })).toBeVisible();
+  await expect(planner.getByText("Destination · FAILED", { exact: true })).toBeVisible();
+  await expect(planner.getByText("Anytime Fitness Oakridge, Oakridge Business Park, Mandaue City", { exact: true })).toBeVisible();
+  await expect(planner.getByText("Anytime Fitness Oakridge, A.S. Fortuna Street, Mandaue City", { exact: true })).toBeVisible();
+  const calculateButton = planner.getByRole("button", { name: "Calculate route with confirmed pins" });
+  await expect(calculateButton).toBeDisabled();
+
+  await planner.getByRole("button", { name: /Use this match: Anytime Fitness Oakridge, A\.S\. Fortuna Street/ }).click();
+  await expect(calculateButton).toBeEnabled();
+  await expect(planner.getByText("Destination · USER_CONFIRMED", { exact: true })).toBeVisible();
+  await expect.poll(() => routeRequests.length).toBe(1);
+  await calculateButton.click();
+  await expect.poll(() => routeRequests.length).toBe(2);
+  expect(routeRequests[1].confirmedCoordinates).toEqual({ destination: { lat: 10.34, lon: 123.92 } });
+  await expect(planner.getByText("Start point · ROUTE_VALIDATED", { exact: true })).toBeVisible();
+  await expect(planner.getByText("Destination · ROUTE_VALIDATED", { exact: true })).toBeVisible();
+  await expect(planner.getByText("2.8 km", { exact: true })).toBeVisible();
+  await expect(planner.getByText("road distance", { exact: true })).toBeVisible();
 });

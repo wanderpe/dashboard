@@ -10,7 +10,7 @@ import {
   RotateCcw,
   Send,
 } from "lucide-react";
-import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { signIn as authSignIn, signOut as authSignOut } from "next-auth/react";
 
 import { CartmanAvatar } from "@/components/cartman-avatar";
@@ -29,6 +29,9 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { CHAT_SUGGESTIONS, getChatSuggestionPrompt } from "@/lib/chat-suggestions.mjs";
+import { parseCartmanWidgetContent } from "@/lib/cartman-widget-protocol.mjs";
+import { mergeLocationContext, normalizeLocationContext } from "@/lib/location-context.mjs";
+import type { LocationContext, LocationContextChangeHandler } from "@/lib/location-context-types";
 import {
   normalizeTodoSnapshot,
   normalizeToolProgress,
@@ -116,6 +119,7 @@ type StreamChunk = {
 
 const SESSION_ID_KEY = "harvy-hermes-session-id";
 const MESSAGE_HISTORY_KEY = "harvy-hermes-message-history";
+const LOCATION_CONTEXT_KEY = "harvy-hermes-location-context";
 const MAX_STORED_MESSAGES = 80;
 
 function newConversationId() {
@@ -151,6 +155,16 @@ function readStoredMessages() {
       .slice(-MAX_STORED_MESSAGES);
   } catch {
     return [];
+  }
+}
+
+function readStoredLocationContext(): LocationContext | null {
+  try {
+    const value = sessionStorage.getItem(LOCATION_CONTEXT_KEY);
+    const parsed: unknown = value ? JSON.parse(value) : null;
+    return normalizeLocationContext(parsed) as LocationContext | null;
+  } catch {
+    return null;
   }
 }
 
@@ -220,6 +234,7 @@ export function HermesChat() {
   const [authenticating, setAuthenticating] = useState(false);
   const [conversationId, setConversationId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [composer, setComposer] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [activeAssistantMessageId, setActiveAssistantMessageId] =
@@ -233,6 +248,19 @@ export function HermesChat() {
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const latestLocationWidgetMessageIdRef = useRef<string | null>(null);
+  const latestLocationWidgetMessageId = [...messages].reverse().find((message) =>
+    message.role === "assistant" &&
+    parseCartmanWidgetContent(message.content).some((part) => part.type === "widget"),
+  )?.id ?? null;
+  useLayoutEffect(() => {
+    latestLocationWidgetMessageIdRef.current = latestLocationWidgetMessageId;
+  }, [latestLocationWidgetMessageId]);
+
+  const handleLocationContextChange = useCallback<LocationContextChangeHandler>((messageId, update) => {
+    if (messageId !== latestLocationWidgetMessageIdRef.current) return;
+    setLocationContext((current) => mergeLocationContext(current, update) as LocationContext | null);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -272,6 +300,7 @@ export function HermesChat() {
 
       setConversationId(storedId);
       setMessages(readStoredMessages());
+      setLocationContext(readStoredLocationContext());
       setStorageReady(true);
 
       if (typeof window !== "undefined") {
@@ -300,6 +329,15 @@ export function HermesChat() {
       JSON.stringify(messages.slice(-MAX_STORED_MESSAGES)),
     );
   }, [messages, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    if (locationContext) {
+      sessionStorage.setItem(LOCATION_CONTEXT_KEY, JSON.stringify(locationContext));
+    } else {
+      sessionStorage.removeItem(LOCATION_CONTEXT_KEY);
+    }
+  }, [locationContext, storageReady]);
 
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -341,7 +379,9 @@ export function HermesChat() {
 
       setAuthPassword("");
       sessionStorage.removeItem(MESSAGE_HISTORY_KEY);
+      sessionStorage.removeItem(LOCATION_CONTEXT_KEY);
       setMessages([]);
+      setLocationContext(null);
       setSession(value);
     } catch (error) {
       setAuthError(
@@ -365,7 +405,9 @@ export function HermesChat() {
     );
     setAuthError("");
     sessionStorage.removeItem(MESSAGE_HISTORY_KEY);
+    sessionStorage.removeItem(LOCATION_CONTEXT_KEY);
     setMessages([]);
+    setLocationContext(null);
     setChatError(null);
     setToolStepsByMessageId(new Map());
     setActiveAssistantMessageId(null);
@@ -378,8 +420,10 @@ export function HermesChat() {
     const nextId = newConversationId();
     sessionStorage.setItem(SESSION_ID_KEY, nextId);
     sessionStorage.removeItem(MESSAGE_HISTORY_KEY);
+    sessionStorage.removeItem(LOCATION_CONTEXT_KEY);
     setConversationId(nextId);
     setMessages([]);
+    setLocationContext(null);
     setComposer("");
     setChatError(null);
     setToolStepsByMessageId(new Map());
@@ -464,6 +508,7 @@ export function HermesChat() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: [{ role: "user", content }],
+          locationContext,
           sessionId: conversationId,
           requestId,
         }),
@@ -920,6 +965,7 @@ export function HermesChat() {
                         message={message}
                         userName={session.profile?.displayName ?? "You"}
                         toolSteps={toolStepsByMessageId.get(message.id) ?? []}
+                        onLocationContextChange={handleLocationContextChange}
                         streaming={
                           streaming && activeAssistantMessageId === message.id
                         }

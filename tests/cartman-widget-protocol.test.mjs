@@ -37,6 +37,64 @@ test("parses a valid route-map widget while preserving surrounding reply text", 
   ]);
 });
 
+test("parses a nearby-map widget with multiple validated categories", () => {
+  const content = [
+    "Here are nearby gyms and stores.",
+    "```cartman-widget",
+    JSON.stringify({
+      type: "nearby-map",
+      center: "Mandaue City Hall, Cebu",
+      categories: ["gym", "store"],
+      radiusMeters: 1500,
+    }),
+    "```",
+  ].join("\n");
+
+  assert.deepEqual(protocol.parseCartmanWidgetContent(content), [
+    { type: "text", text: "Here are nearby gyms and stores.\n" },
+    {
+      type: "widget",
+      widget: {
+        type: "nearby-map",
+        center: "Mandaue City Hall, Cebu",
+        categories: ["gym", "store"],
+        radiusMeters: 1500,
+      },
+    },
+  ]);
+});
+
+test("accepts a nearby-map widget that requests complete route comparison from an explicit origin", () => {
+  const content = [
+    "I’ll compare every discovered gym by road distance.",
+    "```cartman-widget",
+    JSON.stringify({
+      type: "nearby-map",
+      center: "Mandaue City Hall, Cebu",
+      categories: ["gym"],
+      radiusMeters: 1_500,
+      routeOrigin: "Mandaue City Hall, Cebu",
+      routeMode: "driving",
+    }),
+    "```",
+  ].join("\n");
+
+  assert.deepEqual(protocol.parseCartmanWidgetContent(content), [
+    { type: "text", text: "I’ll compare every discovered gym by road distance.\n" },
+    {
+      type: "widget",
+      widget: {
+        type: "nearby-map",
+        center: "Mandaue City Hall, Cebu",
+        categories: ["gym"],
+        radiusMeters: 1_500,
+        routeOrigin: "Mandaue City Hall, Cebu",
+        routeMode: "driving",
+      },
+    },
+  ]);
+});
+
 test("prompt explains when and how to emit the safe route-map block", () => {
   assert.equal(typeof protocol.buildCartmanWidgetPrompt, "function");
   const prompt = protocol.buildCartmanWidgetPrompt();
@@ -47,7 +105,22 @@ test("prompt explains when and how to emit the safe route-map block", () => {
   assert.match(prompt, /origin.*destination/i);
   assert.match(prompt, /driving.*walking.*cycling/i);
   assert.match(prompt, /never invent|do not invent/i);
+  assert.match(prompt, /nearby-map/);
+  assert.match(prompt, /gym.*store.*grocery/i);
+  assert.match(prompt, /never invent coordinates/i);
+  assert.match(prompt, /radiusMeters 500 unless/);
   assert.match(prompt, /HTML|JavaScript/i);
+});
+
+test("prompt keeps route comparison, confirmation, metrics, and follow-up state explicit", () => {
+  const prompt = protocol.buildCartmanWidgetPrompt();
+  assert.match(prompt, /routeOrigin/);
+  assert.match(prompt, /every discovered candidate/i);
+  assert.match(prompt, /road distance.*straight-line distance.*estimated travel time/i);
+  assert.match(prompt, /user-confirmed.*actual user action/i);
+  assert.match(prompt, /previous structured location context/i);
+  assert.match(prompt, /reuse the previous nearby search center as the origin/i);
+  assert.match(prompt, /ask.*which place.*rather than guessing/i);
 });
 
 test("rejects unsupported or extra fields instead of treating them as widgets", () => {

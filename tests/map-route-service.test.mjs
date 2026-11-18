@@ -100,7 +100,7 @@ test("fetches geocoding and routing data, then normalizes it for Leaflet", async
   assert.equal(result.mode, "cycling");
   assert.equal(result.origin.label, "Seattle, Washington, United States");
   assert.equal(result.destination.label, "Portland, Oregon, United States");
-  assert.equal(result.distanceMeters, 280_000);
+  assert.equal(result.roadDistanceMeters, 280_000);
   assert.deepEqual(result.geometry, [
     [47.6062, -122.3321],
     [46.5, -122.45],
@@ -110,6 +110,221 @@ test("fetches geocoding and routing data, then normalizes it for Leaflet", async
   const routeRequest = requestedUrls.find((url) => url.hostname === "router.project-osrm.org");
   assert.match(routeRequest.pathname, /\/route\/v1\/bike\//);
   assert.equal(requestedUrls.filter((url) => url.hostname === "nominatim.openstreetmap.org").length, 2);
+});
+
+test("labels routing metrics as road distance and estimated travel time", async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      code: "Ok",
+      routes: [{
+        distance: 4_500,
+        duration: 600,
+        geometry: { type: "LineString", coordinates: [[123.922, 10.323], [123.93, 10.33]] },
+        legs: [],
+      }],
+    }),
+  });
+  const result = await mapRoute.fetchMapRoute({
+    origin: "Start",
+    destination: "Gym",
+    mode: "driving",
+    confirmedCoordinates: {
+      origin: { lat: 10.323, lon: 123.922 },
+      destination: { lat: 10.33, lon: 123.93 },
+    },
+  }, { fetchImpl, cache: false });
+
+  assert.equal(result.roadDistanceMeters, 4_500);
+  assert.equal(result.estimatedTravelTimeSeconds, 600);
+  assert.equal(Object.hasOwn(result, "distanceMeters"), false);
+  assert.equal(Object.hasOwn(result, "durationSeconds"), false);
+});
+
+test("retries a normalized business and street search after the original geocode misses", async () => {
+  const query = "Anytime Fitness Oakridge on A.S. Fortuna St., Mandaue City";
+  const requestedQueries = [];
+  const fetchImpl = async (input) => {
+    const url = new URL(input);
+    requestedQueries.push(url.searchParams.get("q"));
+    const normalizedBusinessAndCity = "Anytime Fitness Oakridge, Mandaue City";
+    return {
+      ok: true,
+      json: async () => url.searchParams.get("q") === normalizedBusinessAndCity
+        ? [{
+            lat: "10.32",
+            lon: "123.94",
+            name: "Anytime Fitness Oakridge",
+            display_name: "Anytime Fitness Oakridge, A.S. Fortuna Street, Mandaue City, Philippines",
+            type: "fitness_centre",
+            class: "leisure",
+            addresstype: "leisure",
+            address: { road: "A.S. Fortuna Street", city: "Mandaue City", country: "Philippines" },
+          }]
+        : [],
+    };
+  };
+
+  const place = await mapRoute.resolveMapPlace(query, { fetchImpl, cache: false, nominatimIntervalMs: 0 });
+
+  assert.equal(requestedQueries[0], query);
+  assert.ok(requestedQueries.includes("Anytime Fitness Oakridge, Mandaue City"));
+  assert.equal(place.label, "Anytime Fitness Oakridge, A.S. Fortuna Street, Mandaue City, Philippines");
+  assert.equal(place.source, "nominatim");
+  assert.equal(place.resolutionState, "RESOLVED");
+});
+
+test("routes from both Benedicto College and the normalized Anytime Fitness Oakridge match", async () => {
+  const originQuery = "Benedicto College, Mandaue City";
+  const destinationQuery = "Anytime Fitness Oakridge on A.S. Fortuna St., Mandaue City";
+  const normalizedDestination = "Anytime Fitness Oakridge, Mandaue City";
+  const requestedQueries = [];
+  let routeUrl = null;
+  const fetchImpl = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "nominatim.openstreetmap.org") {
+      const query = url.searchParams.get("q");
+      requestedQueries.push(query);
+      if (query === originQuery) {
+        return { ok: true, json: async () => [{
+          lat: "10.339",
+          lon: "123.936",
+          name: "Benedicto College",
+          display_name: "Benedicto College, Mandaue City, Cebu, Philippines",
+          type: "college",
+          class: "amenity",
+          addresstype: "college",
+          address: { city: "Mandaue City", province: "Cebu", country: "Philippines" },
+        }] };
+      }
+      if (query === normalizedDestination) {
+        return { ok: true, json: async () => [{
+          lat: "10.329",
+          lon: "123.914",
+          name: "Anytime Fitness Oakridge",
+          display_name: "Anytime Fitness Oakridge, A.S. Fortuna Street, Mandaue City, Cebu, Philippines",
+          type: "fitness_centre",
+          class: "leisure",
+          addresstype: "leisure",
+          address: { road: "A.S. Fortuna Street", city: "Mandaue City", province: "Cebu", country: "Philippines" },
+        }] };
+      }
+      return { ok: true, json: async () => [] };
+    }
+    routeUrl = url;
+    return { ok: true, json: async () => ({
+      code: "Ok",
+      routes: [{
+        distance: 2_800,
+        duration: 420,
+        geometry: { type: "LineString", coordinates: [[123.936, 10.339], [123.914, 10.329]] },
+        legs: [],
+      }],
+    }) };
+  };
+
+  const route = await mapRoute.fetchMapRoute({
+    origin: originQuery,
+    destination: destinationQuery,
+    mode: "driving",
+  }, { fetchImpl, cache: false, nominatimIntervalMs: 0 });
+
+  assert.equal(route.origin.label, "Benedicto College, Mandaue City, Cebu, Philippines");
+  assert.equal(route.destination.label, "Anytime Fitness Oakridge, A.S. Fortuna Street, Mandaue City, Cebu, Philippines");
+  assert.ok(requestedQueries.includes(originQuery));
+  assert.ok(requestedQueries.includes(destinationQuery));
+  assert.ok(requestedQueries.includes(normalizedDestination));
+  assert.match(routeUrl.pathname, /123\.936,10\.339;123\.914,10\.329/);
+  assert.equal(route.roadDistanceMeters, 2_800);
+  assert.equal(route.resolutionState, "ROUTE_VALIDATED");
+});
+
+test("returns explicit candidate matches instead of selecting an ambiguous business", async () => {
+  const query = "Anytime Fitness Oakridge, Mandaue City";
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => [
+      {
+        lat: "10.32",
+        lon: "123.94",
+        name: "Anytime Fitness Oakridge",
+        display_name: "Anytime Fitness Oakridge, Mandaue City, Philippines",
+        type: "fitness_centre",
+        class: "leisure",
+        addresstype: "leisure",
+        address: { city: "Mandaue City", country: "Philippines" },
+      },
+      {
+        lat: "10.33",
+        lon: "123.95",
+        name: "Anytime Fitness Oakridge",
+        display_name: "Anytime Fitness Oakridge, another site, Mandaue City, Philippines",
+        type: "fitness_centre",
+        class: "leisure",
+        addresstype: "leisure",
+        address: { city: "Mandaue City", country: "Philippines" },
+      },
+    ],
+  });
+
+  await assert.rejects(
+    mapRoute.resolveMapPlace(query, { fetchImpl, cache: false, nominatimIntervalMs: 0 }),
+    (error) => {
+      assert.equal(error.code, "place_ambiguous");
+      assert.equal(error.details.candidates.length, 2);
+      assert.deepEqual(error.details.candidates.map(({ lat, lon }) => [lat, lon]), [[10.32, 123.94], [10.33, 123.95]]);
+      return true;
+    },
+  );
+});
+
+test("preserves resolved route endpoints and exposes ambiguous endpoint candidates", async () => {
+  let routingRequested = false;
+  const fetchImpl = async (input) => {
+    const url = new URL(input);
+    if (url.hostname !== "nominatim.openstreetmap.org") {
+      routingRequested = true;
+      throw new Error("OSRM must not receive an ambiguous endpoint");
+    }
+    const query = url.searchParams.get("q");
+    if (query === "Mandaue City") {
+      return {
+        ok: true,
+        json: async () => [{
+          lat: "10.335",
+          lon: "123.94",
+          name: "Mandaue City",
+          display_name: "Mandaue City, Cebu, Philippines",
+          type: "city",
+          addresstype: "city",
+          address: { city: "Mandaue City", country: "Philippines" },
+        }],
+      };
+    }
+    return {
+      ok: true,
+      json: async () => [
+        { lat: "10.32", lon: "123.94", name: "Anytime Fitness Oakridge", display_name: "Anytime Fitness Oakridge, Site A, Mandaue City", type: "fitness_centre", class: "leisure", addresstype: "leisure", address: { city: "Mandaue City" } },
+        { lat: "10.33", lon: "123.95", name: "Anytime Fitness Oakridge", display_name: "Anytime Fitness Oakridge, Site B, Mandaue City", type: "fitness_centre", class: "leisure", addresstype: "leisure", address: { city: "Mandaue City" } },
+      ],
+    };
+  };
+
+  await assert.rejects(
+    mapRoute.fetchMapRoute({ origin: "Mandaue City", destination: "Anytime Fitness Oakridge, Mandaue City" }, {
+      fetchImpl,
+      cache: false,
+      nominatimIntervalMs: 0,
+    }),
+    (error) => {
+      assert.equal(error.code, "place_ambiguous");
+      assert.deepEqual(error.details.unresolvedEndpoints, ["destination"]);
+      assert.equal(error.details.resolvedEndpoints.origin.label, "Mandaue City, Cebu, Philippines");
+      assert.equal(error.details.candidateMatches.destination.length, 2);
+      return true;
+    },
+  );
+  assert.equal(routingRequested, false);
 });
 
 test("keeps malformed OSRM coordinates out of geometry and requires two valid points", async () => {
@@ -324,7 +539,12 @@ test("returns unresolved endpoints and a locality-only map center instead of rou
 
   assert.deepEqual(requestedQueries, [
     "Sacris Road 293, Bakilid, Mandaue City",
+    "Sacris Road 293, Bakilid",
+    "Sacris Road, Bakilid",
     "Clinica Prime Oakridge, A.S. Fortuna St., Mandaue City",
+    "Clinica Prime Oakridge, AS. Fortuna Street, Mandaue City",
+    "Clinica Prime Oakridge, Mandaue City",
+    "A.S. Fortuna St., Mandaue City",
     "Mandaue City",
   ]);
   assert.equal(routingRequested, false);
@@ -881,12 +1101,13 @@ test("keeps ambiguous same-name mall candidates unresolved after center classifi
       confirmedCoordinates: { origin: { lat: 10.32, lon: 123.94 } },
     }, { fetchImpl, cache: false, nominatimIntervalMs: 0 }),
     (error) => {
-      assert.equal(error.code, "place_not_found");
+      assert.equal(error.code, "place_ambiguous");
       assert.deepEqual(error.details.unresolvedEndpoints, ["destination"]);
+      assert.equal(error.details.candidateMatches.destination.length, 2);
       return true;
     },
   );
-  assert.deepEqual(requestedQueries, [searchQuery]);
+  assert.deepEqual(requestedQueries, [searchQuery, "Ayala Center Cebu mall, Cebu"]);
   assert.equal(routingRequested, false);
 });
 
@@ -932,7 +1153,7 @@ test("does not route a center request to a same-name parking feature", async () 
       return true;
     },
   );
-  assert.deepEqual(requestedQueries, [searchQuery]);
+  assert.deepEqual(requestedQueries, [searchQuery, "Ayala Center Cebu mall, Cebu"]);
   assert.equal(routingRequested, false);
 });
 
@@ -1001,7 +1222,7 @@ test("resolves a city hall returned under its local name and proceeds to routing
   assert.equal(route.origin.label, "Mandaue Presidencia, P. Burgos Street, Centro, Mandaue, Central Visayas, Philippines");
   assert.deepEqual([route.origin.lat, route.origin.lon], [10.3274247, 123.943322]);
   assert.deepEqual([route.destination.lat, route.destination.lon], [10.318116, 123.9048331]);
-  assert.equal(route.distanceMeters, 20_000);
+  assert.equal(route.roadDistanceMeters, 20_000);
   assert.equal(routingRequested, true);
 });
 
@@ -1264,8 +1485,9 @@ test("does not route when multiple distinct geocoder candidates match a locality
       nominatimIntervalMs: 0,
     }),
     (error) => {
-      assert.equal(error.code, "place_not_found");
+      assert.equal(error.code, "place_ambiguous");
       assert.deepEqual(error.details.unresolvedEndpoints, ["origin"]);
+      assert.equal(error.details.candidateMatches.origin.length, 2);
       return true;
     },
   );
@@ -1467,6 +1689,22 @@ test("does not treat the St in St Paul, Minnesota as a street suffix", async () 
       class: "amenity",
       addresstype: "clinic",
       address: { city: "St Paul", state: "Minnesota", country: "United States" },
+    },
+  });
+});
+
+test("resolves a fitness-center result when its venue label contains 'mall'", async () => {
+  await assertPlaceQueryResolved({
+    query: "Anytime Fitness SM J Mall",
+    result: {
+      lat: "10.329",
+      lon: "123.923",
+      name: "Anytime Fitness SM J Mall",
+      display_name: "Anytime Fitness SM J Mall, Mandaue City, Cebu, Philippines",
+      type: "fitness_centre",
+      class: "leisure",
+      addresstype: "leisure",
+      address: { city: "Mandaue City", province: "Cebu", country: "Philippines" },
     },
   });
 });

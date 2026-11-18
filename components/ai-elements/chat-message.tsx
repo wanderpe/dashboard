@@ -15,6 +15,8 @@ import {
 import { getUniqueCitationSources, parseInlineCitations } from "@/lib/inline-citations.mjs";
 import { parseCartmanWidgetContent } from "@/lib/cartman-widget-protocol.mjs";
 import { CartmanRouteMapWidget } from "@/components/ai-elements/route-map-widget";
+import { CartmanNearbyMapWidget } from "@/components/ai-elements/nearby-map-widget";
+import type { LocationContextChangeHandler } from "@/lib/location-context-types";
 import type { ToolProgressStep } from "@/lib/tool-progress.mjs";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +33,7 @@ type AIChatMessageProps = {
   userName: string;
   toolSteps?: readonly ToolProgressStep[];
   streaming?: boolean;
+  onLocationContextChange?: LocationContextChangeHandler;
 };
 
 export function AIChatMessage({
@@ -38,6 +41,7 @@ export function AIChatMessage({
   userName,
   toolSteps = [],
   streaming = false,
+  onLocationContextChange,
 }: AIChatMessageProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const isUser = message.role === "user";
@@ -57,7 +61,21 @@ export function AIChatMessage({
     ? message.content
     : assistantParts.map((part, partIndex) => {
         if (part.type === "widget") {
-          return <CartmanRouteMapWidget key={`widget-${partIndex}`} widget={part.widget} />;
+          return part.widget.type === "route-map" ? (
+            <CartmanRouteMapWidget
+              key={`widget-${partIndex}`}
+              widget={part.widget}
+              messageId={message.id}
+              onLocationContextChange={onLocationContextChange}
+            />
+          ) : (
+            <CartmanNearbyMapWidget
+              key={`widget-${partIndex}`}
+              widget={part.widget}
+              messageId={message.id}
+              onLocationContextChange={onLocationContextChange}
+            />
+          );
         }
         return parseInlineCitations(part.text).map((segment, segmentIndex) =>
           segment.type === "citation" ? (

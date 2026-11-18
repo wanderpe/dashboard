@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RoutePinMap } from "@/components/ai-elements/route-pin-picker";
 import { coordinatesForCurrentRoute, isValidCoordinates, routeContextForInputs, routeRequestContextMatches, routeSessionMatches } from "@/lib/route-map-request.mjs";
+import type { LocationContextChangeHandler, LocationResolutionState } from "@/lib/location-context-types";
 
 type TravelMode = "driving" | "walking" | "cycling";
 type Endpoint = "origin" | "destination";
@@ -42,19 +43,32 @@ type RouteMapWidgetData = {
   destination: string;
   mode: TravelMode;
 };
-type PlaceResult = { label: string; lat: number; lon: number; source?: "nominatim" | "map_pin" };
+type ResolutionState = LocationResolutionState;
+type PlaceResult = {
+  label: string;
+  lat: number;
+  lon: number;
+  source: "nominatim" | "photon" | "map_pin";
+  resolutionState: ResolutionState;
+  userConfirmed: boolean;
+};
 type PinSelectionDetails = {
   unresolvedEndpoints: Endpoint[];
   resolvedEndpoints: Partial<Record<Endpoint, PlaceResult>>;
+  resolutionStates?: Partial<Record<Endpoint, ResolutionState>>;
+  candidateMatches?: Partial<Record<Endpoint, PlaceResult[]>>;
+  candidateMatchesMayBeTruncated?: Partial<Record<Endpoint, boolean>>;
   mapCenter: MapCenter | null;
 };
-type RouteStep = { instruction: string; distanceMeters: number };
+type RouteStep = { instruction: string; roadDistanceMeters: number };
 type RouteResult = {
   origin: PlaceResult;
   destination: PlaceResult;
   mode: TravelMode;
-  distanceMeters: number;
-  durationSeconds: number;
+  straightLineDistanceMeters: number;
+  roadDistanceMeters: number;
+  estimatedTravelTimeSeconds: number;
+  resolutionState: "ROUTE_VALIDATED";
   geometry: Array<[number, number]>;
   steps: RouteStep[];
 };
@@ -84,20 +98,24 @@ function isCoordinate(value: unknown): value is number {
 
 function isPlaceResult(value: unknown): value is PlaceResult {
   if (!isRecord(value)) return false;
-  const sourceIsValid = value.source === undefined || value.source === "nominatim" || value.source === "map_pin";
+  const sourceIsValid = value.source === "nominatim" || value.source === "photon" || value.source === "map_pin";
+  const stateIsValid = value.resolutionState === "RESOLVED" || value.resolutionState === "USER_CONFIRMED" || value.resolutionState === "ROUTE_VALIDATED";
   return (
-    typeof value.label === "string" && sourceIsValid &&
+    typeof value.label === "string" && sourceIsValid && stateIsValid && typeof value.userConfirmed === "boolean" &&
+    (value.source !== "map_pin" || value.userConfirmed) &&
+    (value.resolutionState !== "USER_CONFIRMED" || value.userConfirmed) &&
     isCoordinate(value.lat) && value.lat >= -90 && value.lat <= 90 &&
     isCoordinate(value.lon) && value.lon >= -180 && value.lon <= 180
   );
 }
 
 function isRouteResult(value: unknown, mode: TravelMode): value is RouteResult {
-  if (!isRecord(value) || value.mode !== mode) return false;
+  if (!isRecord(value) || value.mode !== mode || value.resolutionState !== "ROUTE_VALIDATED") return false;
   if (!isPlaceResult(value.origin) || !isPlaceResult(value.destination)) return false;
   if (
-    typeof value.distanceMeters !== "number" || !Number.isFinite(value.distanceMeters) || value.distanceMeters < 0 ||
-    typeof value.durationSeconds !== "number" || !Number.isFinite(value.durationSeconds) || value.durationSeconds < 0
+    typeof value.straightLineDistanceMeters !== "number" || !Number.isFinite(value.straightLineDistanceMeters) || value.straightLineDistanceMeters < 0 ||
+    typeof value.roadDistanceMeters !== "number" || !Number.isFinite(value.roadDistanceMeters) || value.roadDistanceMeters < 0 ||
+    typeof value.estimatedTravelTimeSeconds !== "number" || !Number.isFinite(value.estimatedTravelTimeSeconds) || value.estimatedTravelTimeSeconds < 0
   ) return false;
   if (
     !Array.isArray(value.geometry) || value.geometry.length < 2 ||
@@ -109,7 +127,7 @@ function isRouteResult(value: unknown, mode: TravelMode): value is RouteResult {
   ) return false;
   return Array.isArray(value.steps) && value.steps.every((step) =>
     isRecord(step) && typeof step.instruction === "string" &&
-    typeof step.distanceMeters === "number" && Number.isFinite(step.distanceMeters) && step.distanceMeters >= 0
+    typeof step.roadDistanceMeters === "number" && Number.isFinite(step.roadDistanceMeters) && step.roadDistanceMeters >= 0
   );
 }
 
@@ -135,11 +153,28 @@ function isPinSelectionDetails(value: unknown): value is PinSelectionDetails {
     unresolved.some((endpoint) => !isEndpoint(endpoint)) || new Set(unresolved).size !== unresolved.length
   ) return false;
   if (Object.entries(value.resolvedEndpoints).some(([endpoint, place]) => !isEndpoint(endpoint) || !isPlaceResult(place))) return false;
+  const validStates: ResolutionState[] = ["UNRESOLVED", "SEARCHING", "RESOLVED", "USER_CONFIRMED", "ROUTE_VALIDATED", "FAILED"];
+  if (value.resolutionStates !== undefined && (
+    !isRecord(value.resolutionStates) ||
+    Object.entries(value.resolutionStates).some(([endpoint, state]) => !isEndpoint(endpoint) || !validStates.includes(state as ResolutionState))
+  )) return false;
+  if (value.candidateMatches !== undefined && (
+    !isRecord(value.candidateMatches) ||
+    Object.entries(value.candidateMatches).some(([endpoint, candidates]) =>
+      !isEndpoint(endpoint) || !Array.isArray(candidates) || candidates.length > 5 ||
+      candidates.some((candidate) => !isPlaceResult(candidate) || candidate.userConfirmed || candidate.resolutionState !== "RESOLVED")
+    )
+  )) return false;
+  if (value.candidateMatchesMayBeTruncated !== undefined && (
+    !isRecord(value.candidateMatchesMayBeTruncated) ||
+    Object.entries(value.candidateMatchesMayBeTruncated).some(([endpoint, truncated]) => !isEndpoint(endpoint) || typeof truncated !== "boolean")
+  )) return false;
   return value.mapCenter === null || isMapCenter(value.mapCenter);
 }
 
 function pinSelectionResponse(payload: unknown): { message: string; details: PinSelectionDetails } | null {
-  if (!isRecord(payload) || !isRecord(payload.error) || payload.error.code !== "place_not_found") return null;
+  if (!isRecord(payload) || !isRecord(payload.error) ||
+      (payload.error.code !== "place_not_found" && payload.error.code !== "place_ambiguous")) return null;
   if (!isPinSelectionDetails(payload.error.details)) return null;
   const message = typeof payload.error.message === "string" && payload.error.message.trim()
     ? payload.error.message.trim()
@@ -198,7 +233,15 @@ function markerIcon(L: typeof import("leaflet"), letter: string, variant: "start
   });
 }
 
-export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }) {
+export function CartmanRouteMapWidget({
+  widget,
+  messageId,
+  onLocationContextChange,
+}: {
+  widget: RouteMapWidgetData;
+  messageId: string;
+  onLocationContextChange?: LocationContextChangeHandler;
+}) {
   const [mode, setMode] = useState<TravelMode>(widget.mode);
   const [routeDataSession, setRouteDataSession] = useState<RouteResultSession | null>(null);
   const [status, setStatus] = useState<RouteStatus>("loading");
@@ -249,6 +292,13 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
     requestContextRef.current = nextContext;
     if (nextContext.generation !== currentContext.generation) setInputGeneration(nextContext.generation);
   }, [widget.origin, widget.destination, mode, retryCount]);
+
+  useEffect(() => {
+    onLocationContextChange?.(messageId, {
+      kind: "route",
+      value: { origin: widget.origin, destination: widget.destination, mode },
+    });
+  }, [onLocationContextChange, messageId, widget.origin, widget.destination, mode]);
 
   useEffect(() => {
     const previous = routeInputsRef.current;
@@ -576,6 +626,39 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
     }
   }
 
+  function confirmGeocoderCandidate(endpoint: Endpoint, candidate: PlaceResult) {
+    if (status === "loading" || !currentPinSession || !pinSelection?.unresolvedEndpoints.includes(endpoint)) return;
+    const point = { lat: candidate.lat, lon: candidate.lon };
+    const latitude = String(point.lat);
+    const longitude = String(point.lon);
+    const nextCoordinates = { ...confirmedCoordinates, [endpoint]: point };
+    setDraftsByEndpoint((current) => ({ ...current, [endpoint]: { coordinate: point, latitude, longitude } }));
+    setConfirmedCoordinatesSession({
+      origin: widget.origin,
+      destination: widget.destination,
+      generation: requestContextRef.current.generation,
+      coordinates: nextCoordinates,
+    });
+    setDraftNeedsConfirmation((current) => ({ ...current, [endpoint]: false }));
+
+    const nextEndpoint = pinSelection.unresolvedEndpoints.find(
+      (unresolved) => unresolved !== endpoint && !nextCoordinates[unresolved],
+    );
+    if (nextEndpoint) {
+      setActiveEndpoint(nextEndpoint);
+      const savedDraft = draftsByEndpoint[nextEndpoint];
+      const nextPoint = savedDraft ? savedDraft.coordinate : nextCoordinates[nextEndpoint] ?? null;
+      setDraftCoordinate(nextPoint);
+      setLatitudeInput(savedDraft ? savedDraft.latitude : nextPoint ? String(nextPoint.lat) : "");
+      setLongitudeInput(savedDraft ? savedDraft.longitude : nextPoint ? String(nextPoint.lon) : "");
+    } else {
+      setActiveEndpoint(endpoint);
+      setDraftCoordinate(point);
+      setLatitudeInput(latitude);
+      setLongitudeInput(longitude);
+    }
+  }
+
   const allPinsConfirmed = Boolean(
     pinSelection && pinSelection.unresolvedEndpoints.every((endpoint) =>
       confirmedCoordinates[endpoint] &&
@@ -601,6 +684,22 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
   }
 
   const selectedEndpoint = activeEndpoint ?? pinSelection?.unresolvedEndpoints[0] ?? null;
+  const selectedCandidateMatches = selectedEndpoint ? pinSelection?.candidateMatches?.[selectedEndpoint] ?? [] : [];
+  const selectedCandidatesMayBeTruncated = selectedEndpoint
+    ? pinSelection?.candidateMatchesMayBeTruncated?.[selectedEndpoint] ?? false
+    : false;
+  const endpointResolutionState = (endpoint: Endpoint): LocationResolutionState => {
+    if (routeData) return "ROUTE_VALIDATED";
+    if (status === "loading") return "SEARCHING";
+    if (confirmedCoordinates[endpoint]) return "USER_CONFIRMED";
+    if (pinSelection) {
+      return pinSelection.resolutionStates?.[endpoint] ??
+        pinSelection.resolvedEndpoints[endpoint]?.resolutionState ??
+        (pinSelection.unresolvedEndpoints.includes(endpoint) ? "FAILED" : "UNRESOLVED");
+    }
+    if (status === "error") return "FAILED";
+    return "UNRESOLVED";
+  };
 
   return (
     <section className="my-4 w-full min-w-0 overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm" aria-label="Route planner">
@@ -641,24 +740,38 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
         </div>
       </header>
 
+      <div className="flex flex-wrap gap-x-5 gap-y-1 border-b border-border px-4 py-2 text-xs text-muted-foreground" role="status" aria-label="Location resolution states">
+        <span>Start point · {endpointResolutionState("origin")}</span>
+        <span>Destination · {endpointResolutionState("destination")}</span>
+      </div>
+
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="flex size-8 items-center justify-center rounded-full bg-muted text-muted-foreground" aria-hidden="true">
+            <span className="size-2.5 rounded-full border-2 border-current" />
+          </span>
+          <span className="text-sm font-semibold tabular-nums text-foreground">
+            {routeData ? formatDistance(routeData.straightLineDistanceMeters) : status === "loading" ? "Calculating…" : "—"}
+          </span>
+          <span className="text-xs text-muted-foreground">straight-line distance</span>
+        </div>
         <div className="flex items-center gap-2">
           <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-primary" aria-hidden="true">
             <span className="size-2.5 rounded-full bg-primary" />
           </span>
           <span className="text-sm font-semibold tabular-nums text-foreground">
-            {routeData ? formatDistance(routeData.distanceMeters) : status === "loading" ? "Calculating…" : "—"}
+            {routeData ? formatDistance(routeData.roadDistanceMeters) : status === "loading" ? "Calculating…" : "—"}
           </span>
-          <span className="text-xs text-muted-foreground">distance</span>
+          <span className="text-xs text-muted-foreground">road distance</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="flex size-8 items-center justify-center rounded-full bg-secondary text-secondary-foreground" aria-hidden="true">
             <Clock3 className="size-4" />
           </span>
           <span className="text-sm font-semibold tabular-nums text-foreground">
-            {routeData ? formatDuration(routeData.durationSeconds) : status === "loading" ? "Calculating…" : "—"}
+            {routeData ? formatDuration(routeData.estimatedTravelTimeSeconds) : status === "loading" ? "Calculating…" : "—"}
           </span>
-          <span className="text-xs text-muted-foreground">estimated · no live traffic</span>
+          <span className="text-xs text-muted-foreground">estimated travel time · no live traffic</span>
         </div>
       </div>
 
@@ -667,7 +780,7 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
           <div>
             <h4 className="text-sm font-semibold text-foreground">Confirm locations on the map</h4>
             <p className="mt-1 text-sm text-muted-foreground">{errorMessage}</p>
-            <p className="mt-1 text-sm text-muted-foreground">Choose each missing stop, place its pin on the map or enter coordinates, then confirm it. No route is calculated until you confirm the pins and continue.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Choose a possible match or place each missing stop’s pin on the map or enter coordinates, then confirm it. No route is calculated until you confirm the locations and continue.</p>
           </div>
           {pinSelection.mapCenter ? (
             <p className="text-xs leading-5 text-muted-foreground">
@@ -697,6 +810,29 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
               );
             })}
           </div>
+          {selectedCandidateMatches.length > 0 && selectedEndpoint ? (
+            <div className="grid gap-2">
+              <p className="text-sm font-medium text-foreground">Possible matches for {endpointLabel(selectedEndpoint).toLowerCase()} · choose one to confirm</p>
+              <div className="grid gap-2" role="group" aria-label={`Possible matches for ${endpointLabel(selectedEndpoint)}`}>
+                {selectedCandidateMatches.map((candidate, index) => (
+                  <Button
+                    key={`${candidate.lat},${candidate.lon},${index}`}
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 w-full whitespace-normal text-left leading-5"
+                    aria-label={`Use this match: ${candidate.label}`}
+                    onClick={() => confirmGeocoderCandidate(selectedEndpoint, candidate)}
+                    disabled={status === "loading"}
+                  >
+                    {candidate.label}
+                  </Button>
+                ))}
+              </div>
+              {selectedCandidatesMayBeTruncated ? (
+                <p className="text-xs text-muted-foreground" role="status">Only the first matching candidates were returned. Refine the place name if none is correct.</p>
+              ) : null}
+            </div>
+          ) : null}
           {selectedEndpoint ? (
             <div className="grid gap-3">
               <p className="text-sm text-foreground" aria-live="polite">
@@ -869,7 +1005,7 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
                   {index + 1}
                 </span>
                 <span className="min-w-0 flex-1 text-sm leading-5 text-foreground">{step.instruction}</span>
-                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatDistance(step.distanceMeters)}</span>
+                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">Road · {formatDistance(step.roadDistanceMeters)}</span>
               </li>
             ))}
           </ol>
@@ -887,7 +1023,7 @@ export function CartmanRouteMapWidget({ widget }: { widget: RouteMapWidgetData }
             : status === "error"
               ? errorMessage
               : routeData
-                ? `${formatDistance(routeData.distanceMeters)} route loaded.`
+                ? `${formatDistance(routeData.roadDistanceMeters)} road route loaded.`
                 : ""}
       </p>
     </section>
