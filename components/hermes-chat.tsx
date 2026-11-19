@@ -166,7 +166,7 @@ function readStoredLocationContext(): LocationContext | null {
   try {
     const value = sessionStorage.getItem(LOCATION_CONTEXT_KEY);
     const parsed: unknown = value ? JSON.parse(value) : null;
-    return withoutCurrentLocationRouteContext(
+    return withoutCurrentLocationContext(
       normalizeLocationContext(parsed) as LocationContext | null,
     );
   } catch {
@@ -174,13 +174,15 @@ function readStoredLocationContext(): LocationContext | null {
   }
 }
 
-function withoutCurrentLocationRouteContext(context: LocationContext | null): LocationContext | null {
+function withoutCurrentLocationContext(context: LocationContext | null): LocationContext | null {
   if (!context) return null;
   const remaining: LocationContext = { ...context };
   if (remaining.route && isCurrentLocationOriginLabel(remaining.route.origin)) {
     delete remaining.route;
   }
-  if (remaining.nearby?.routeOrigin && isCurrentLocationOriginLabel(remaining.nearby.routeOrigin)) {
+  if (remaining.nearby && isCurrentLocationOriginLabel(remaining.nearby.center)) {
+    delete remaining.nearby;
+  } else if (remaining.nearby?.routeOrigin && isCurrentLocationOriginLabel(remaining.nearby.routeOrigin)) {
     const { center, categories, radiusMeters, candidateNames } = remaining.nearby;
     remaining.nearby = { center, categories, radiusMeters, candidateNames };
   }
@@ -256,7 +258,7 @@ export function HermesChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [currentRouteLocation, setCurrentRouteLocation] = useState<CurrentRouteLocation | null>(null);
-  const routeOriginCoordinates = useMemo(
+  const currentLocationCoordinates = useMemo(
     () => currentRouteLocation
       ? { lat: currentRouteLocation.lat, lon: currentRouteLocation.lon }
       : null,
@@ -290,7 +292,7 @@ export function HermesChat() {
   const handleLocationContextChange = useCallback<LocationContextChangeHandler>((messageId, update) => {
     if (messageId !== latestLocationWidgetMessageIdRef.current) return;
     if (update.kind === "route" && isCurrentLocationOriginLabel(update.value.origin)) {
-      setLocationContext((current) => withoutCurrentLocationRouteContext(current));
+      setLocationContext((current) => withoutCurrentLocationContext(current));
       return;
     }
     const safeUpdate = update.kind === "nearby" && update.value.routeOrigin &&
@@ -305,7 +307,7 @@ export function HermesChat() {
           },
         }
       : update;
-    setLocationContext((current) => withoutCurrentLocationRouteContext(
+    setLocationContext((current) => withoutCurrentLocationContext(
       mergeLocationContext(current, safeUpdate) as LocationContext | null,
     ));
   }, []);
@@ -499,7 +501,7 @@ export function HermesChat() {
               ? Math.max(0, position.coords.accuracy)
               : 0,
           });
-          setLocationContext((current) => withoutCurrentLocationRouteContext(current));
+          setLocationContext((current) => withoutCurrentLocationContext(current));
           setLocatingRouteOrigin(false);
         },
         (error) => {
@@ -527,7 +529,7 @@ export function HermesChat() {
     setCurrentRouteLocation(null);
     setLocatingRouteOrigin(false);
     setRouteLocationError("");
-    setLocationContext((current) => withoutCurrentLocationRouteContext(current));
+    setLocationContext((current) => withoutCurrentLocationContext(current));
   }
 
   function startNewConversation() {
@@ -1086,7 +1088,7 @@ export function HermesChat() {
                         message={message}
                         userName={session.profile?.displayName ?? "You"}
                         toolSteps={toolStepsByMessageId.get(message.id) ?? []}
-                        routeOriginCoordinates={routeOriginCoordinates}
+                        currentLocationCoordinates={currentLocationCoordinates}
                         onLocationContextChange={handleLocationContextChange}
                         streaming={
                           streaming && activeAssistantMessageId === message.id
@@ -1210,13 +1212,13 @@ export function HermesChat() {
                 {locatingRouteOrigin
                   ? "Locating…"
                   : currentRouteLocation
-                    ? "Update route location"
-                    : "Use my location for routes"}
+                    ? "Update my location"
+                    : "Use my location for routes and nearby searches"}
               </Button>
               {currentRouteLocation ? (
                 <>
-                  <span role="status" aria-label="Route origin location">
-                    Using your location as the default route start · accuracy ±{Math.round(currentRouteLocation.accuracyMeters)} m.
+                  <span role="status" aria-label="Current location">
+                    Using your location for routes and nearby searches · accuracy ±{Math.round(currentRouteLocation.accuracyMeters)} m.
                   </span>
                   <Button
                     type="button"
@@ -1229,7 +1231,7 @@ export function HermesChat() {
                   </Button>
                 </>
               ) : null}
-              <span>Location is requested only on click. Coordinates are sent to the map-routing provider (OSRM) for route calculations. They are not sent to AI chat or saved chat history and clear on refresh.</span>
+              <span>Location is requested only on click. Coordinates are sent to Photon/OpenStreetMap for nearby searches and OSRM for route calculations; they are not sent to AI chat or saved chat/location context and clear on refresh.</span>
               {routeLocationError ? (
                 <span role="alert" className="text-[#8a3832]">{routeLocationError}</span>
               ) : null}

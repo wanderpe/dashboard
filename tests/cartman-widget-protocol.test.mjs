@@ -139,6 +139,19 @@ test("route prompt uses current location only after opt-in and preserves explici
   assert.doesNotMatch(defaultPrompt, /explicitly opted in to browser location/i);
 });
 
+test("nearby prompt uses current location for implicit centers only after opt-in", () => {
+  const optedInPrompt = protocol.buildCartmanWidgetPrompt({
+    useCurrentLocationAsRouteOrigin: true,
+  });
+  assert.match(optedInPrompt, /for nearby searches, if the user asks for places without naming a center.*exact center label "Current location"/i);
+  assert.match(optedInPrompt, /explicitly names a different center.*preserve it instead/i);
+  assert.match(optedInPrompt, /without opt-in, ask for an address or landmark/i);
+  assert.match(optedInPrompt, /coordinates are not available to you/i);
+
+  const defaultPrompt = protocol.buildCartmanWidgetPrompt();
+  assert.doesNotMatch(defaultPrompt, /nearby search has no explicitly named center/i);
+});
+
 test("rejects unsupported or extra fields instead of treating them as widgets", () => {
   const unsafe = [
     "```cartman-widget",

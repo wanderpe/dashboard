@@ -31,7 +31,7 @@ export type ChatDisplayMessage = {
 type AIChatMessageProps = {
   message: ChatDisplayMessage;
   userName: string;
-  routeOriginCoordinates?: { lat: number; lon: number } | null;
+  currentLocationCoordinates?: { lat: number; lon: number } | null;
   toolSteps?: readonly ToolProgressStep[];
   streaming?: boolean;
   onLocationContextChange?: LocationContextChangeHandler;
@@ -40,7 +40,7 @@ type AIChatMessageProps = {
 export function AIChatMessage({
   message,
   userName,
-  routeOriginCoordinates = null,
+  currentLocationCoordinates = null,
   toolSteps = [],
   streaming = false,
   onLocationContextChange,
@@ -68,7 +68,7 @@ export function AIChatMessage({
               key={`widget-${partIndex}`}
               widget={part.widget}
               messageId={message.id}
-              routeOriginCoordinates={routeOriginCoordinates}
+              routeOriginCoordinates={currentLocationCoordinates}
               onLocationContextChange={onLocationContextChange}
             />
           ) : (
@@ -76,7 +76,7 @@ export function AIChatMessage({
               key={`widget-${partIndex}`}
               widget={part.widget}
               messageId={message.id}
-              routeOriginCoordinates={routeOriginCoordinates}
+              currentLocationCoordinates={currentLocationCoordinates}
               onLocationContextChange={onLocationContextChange}
             />
           );

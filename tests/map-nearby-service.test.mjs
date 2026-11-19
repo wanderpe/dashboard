@@ -27,6 +27,35 @@ test("validates and normalizes nearby-place searches", () => {
   assert.equal(nearbyPlaces.parseMapNearbyRequest({ center: "Mandaue", categories: ["gym"], html: "<script>" }), null);
 });
 
+test("requires confirmed coordinates for a current-location nearby center only", () => {
+  const point = { lat: 10.321, lon: 123.941 };
+  const request = {
+    center: "Current location",
+    categories: ["store"],
+    confirmedCoordinates: { center: point },
+  };
+  assert.equal(nearbyPlaces.parseMapNearbyRequest({ center: "Current location", categories: ["store"] }), null);
+  assert.deepEqual(nearbyPlaces.parseMapNearbyRequest(request), {
+    center: "Current location",
+    categories: ["store"],
+    radiusMeters: 500,
+    confirmedCoordinates: { center: point },
+  });
+  assert.equal(nearbyPlaces.parseMapNearbyRequest({ ...request, center: "Mandaue City Hall, Cebu" }), null);
+  assert.equal(nearbyPlaces.parseMapNearbyRequest({
+    ...request,
+    confirmedCoordinates: { center: { lat: 91, lon: point.lon } },
+  }), null);
+  assert.equal(nearbyPlaces.parseMapNearbyRequest({
+    ...request,
+    confirmedCoordinates: { center: { ...point, accuracyMeters: 10 } },
+  }), null);
+  assert.equal(nearbyPlaces.parseMapNearbyRequest({
+    ...request,
+    confirmedCoordinates: { origin: point },
+  }), null);
+});
+
 test("geocodes the named center and returns named nearby OSM places once", async () => {
   assert.equal(typeof nearbyPlaces.fetchMapNearbyPlaces, "function");
   const requests = [];
@@ -104,6 +133,54 @@ test("geocodes the named center and returns named nearby OSM places once", async
     assert.equal(url.searchParams.get("lon"), "123.922");
     assert.equal(url.searchParams.get("radius"), "1.5");
     assert.equal(url.searchParams.get("limit"), "50");
+  }
+});
+
+test("uses confirmed current-location coordinates directly and bypasses nearby caches", async () => {
+  const point = { lat: 10.321, lon: 123.941 };
+  const requests = [];
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    requests.push(url);
+    if (url.hostname === "nominatim.openstreetmap.org") {
+      return { ok: true, json: async () => [] };
+    }
+    if (url.hostname === "photon.test") {
+      return { ok: true, json: async () => ({ features: [{
+        type: "Feature",
+        properties: { name: "Nearby Market", osm_key: "shop", osm_value: "supermarket", osm_type: "N", osm_id: 8201 },
+        geometry: { type: "Point", coordinates: [point.lon + 0.0001, point.lat + 0.0001] },
+      }] }) };
+    }
+    throw new Error("Unexpected provider request");
+  };
+  const request = {
+    center: "Current location",
+    categories: ["store"],
+    radiusMeters: 500,
+    confirmedCoordinates: { center: point },
+  };
+  const options = { fetchImpl, cache: true, nominatimIntervalMs: 0, photonIntervalMs: 0, photonEndpoint: "https://photon.test/reverse" };
+
+  const first = await nearbyPlaces.fetchMapNearbyPlaces(request, options);
+  const second = await nearbyPlaces.fetchMapNearbyPlaces(request, options);
+
+  const expectedCenter = {
+    label: "User-confirmed pin for Current location",
+    ...point,
+    source: "map_pin",
+    resolutionState: "USER_CONFIRMED",
+    userConfirmed: true,
+  };
+  assert.deepEqual(first.center, expectedCenter);
+  assert.deepEqual(second.center, expectedCenter);
+  assert.equal(first.places[0].name, "Nearby Market");
+  assert.equal(requests.filter((url) => url.hostname === "nominatim.openstreetmap.org").length, 0);
+  const photonRequests = requests.filter((url) => url.hostname === "photon.test");
+  assert.equal(photonRequests.length, 2);
+  for (const url of photonRequests) {
+    assert.equal(url.searchParams.get("lat"), String(point.lat));
+    assert.equal(url.searchParams.get("lon"), String(point.lon));
   }
 });
 

@@ -39,6 +39,96 @@ test("requires confirmed coordinates for a current-location comparison origin", 
   }), null);
 });
 
+test("accepts a confirmed current-location search center for route comparisons", () => {
+  const center = { lat: 10.321, lon: 123.941 };
+  const request = {
+    origin: "Mandaue City Hall, Cebu",
+    center: "Current location",
+    categories: ["store"],
+    radiusMeters: 500,
+    mode: "driving",
+    confirmedCoordinates: { center },
+  };
+  assert.deepEqual(comparison.parseMapRouteComparisonRequest(request), request);
+  assert.equal(comparison.parseMapRouteComparisonRequest({
+    ...request,
+    confirmedCoordinates: undefined,
+  }), null);
+  assert.equal(comparison.parseMapRouteComparisonRequest({
+    ...request,
+    center: "Mandaue City Hall, Cebu",
+  }), null);
+  assert.equal(comparison.parseMapRouteComparisonRequest({
+    ...request,
+    confirmedCoordinates: { center: { lat: 91, lon: center.lon } },
+  }), null);
+});
+
+test("uses a confirmed current-location center for nearby route comparisons", async () => {
+  const center = { lat: 10.321, lon: 123.941 };
+  const candidate = { lat: 10.3211, lon: 123.9411 };
+  const photonRequests = [];
+  const routeRequests = [];
+  const nominatimQueries = [];
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "nominatim.openstreetmap.org") {
+      nominatimQueries.push(url.searchParams.get("q"));
+      return { ok: true, json: async () => [{
+        lat: "10.32", lon: "123.93", name: "Mandaue City Hall",
+        display_name: "Mandaue City Hall, Mandaue, Cebu, Philippines", type: "townhall", class: "amenity",
+        addresstype: "amenity", address: { city: "Mandaue", province: "Cebu", country: "Philippines" },
+      }] };
+    }
+    if (url.hostname === "photon.test") {
+      photonRequests.push(url);
+      return { ok: true, json: async () => ({ features: [{
+        type: "Feature",
+        properties: { name: "Nearby Market", osm_key: "shop", osm_value: "supermarket", osm_type: "N", osm_id: 8202 },
+        geometry: { type: "Point", coordinates: [candidate.lon, candidate.lat] },
+      }] }) };
+    }
+    if (url.hostname === "router.project-osrm.org") {
+      routeRequests.push(url);
+      const coordinates = url.pathname.split("/").at(-1).split(";");
+      const [originLon, originLat] = coordinates[0].split(",").map(Number);
+      const [destinationLon, destinationLat] = coordinates[1].split(",").map(Number);
+      return { ok: true, json: async () => ({ code: "Ok", routes: [{
+        distance: 1_200,
+        duration: 240,
+        geometry: { type: "LineString", coordinates: [[originLon, originLat], [destinationLon, destinationLat]] },
+        legs: [],
+      }] }) };
+    }
+    throw new Error(`Unexpected provider ${url.hostname}`);
+  };
+  const request = {
+    origin: "Mandaue City Hall, Cebu",
+    center: "Current location",
+    categories: ["store"],
+    radiusMeters: 500,
+    mode: "driving",
+    confirmedCoordinates: { center },
+  };
+  const options = { fetchImpl, cache: true, nominatimIntervalMs: 0, photonIntervalMs: 0, photonEndpoint: "https://photon.test/reverse" };
+
+  const first = await comparison.fetchMapRouteComparison(request, options);
+  await comparison.fetchMapRouteComparison(request, options);
+
+  assert.deepEqual(first.center, {
+    label: "User-confirmed pin for Current location",
+    ...center,
+    source: "map_pin",
+    resolutionState: "USER_CONFIRMED",
+    userConfirmed: true,
+  });
+  assert.equal(nominatimQueries.length, 1);
+  assert.ok(nominatimQueries.every((query) => query === "Mandaue City Hall, Cebu"));
+  assert.equal(photonRequests.length, 2);
+  assert.ok(photonRequests.every((url) => url.searchParams.get("lat") === String(center.lat) && url.searchParams.get("lon") === String(center.lon)));
+  assert.equal(routeRequests.length, 2);
+});
+
 test("ranks every discovered candidate by OSRM road distance using provider coordinates", async () => {
   assert.equal(typeof comparison.fetchMapRouteComparison, "function");
   const origin = { lat: 10.323, lon: 123.922 };
@@ -143,12 +233,13 @@ test("uses confirmed current-location coordinates as the origin for nearby route
   const origin = { lat: 10.321, lon: 123.941 };
   const routeRequests = [];
   const nominatimQueries = [];
+  const photonRequests = [];
   const fetchImpl = async (input) => {
     const url = new URL(String(input));
     if (url.hostname === "nominatim.openstreetmap.org") {
       const query = url.searchParams.get("q");
       nominatimQueries.push(query);
-      if (query !== "Mandaue City Hall, Cebu") {
+      if (query !== "Mandaue City Hall, Mandaue, Cebu, Philippines") {
         throw new Error(`Unexpected geocoding query ${query}; the current origin should not be geocoded`);
       }
       return { ok: true, json: async () => [{
@@ -158,6 +249,7 @@ test("uses confirmed current-location coordinates as the origin for nearby route
       }] };
     }
     if (url.hostname === "photon.test") {
+      photonRequests.push(url);
       return { ok: true, json: async () => ({ features: [{
         type: "Feature",
         id: "N/404",
@@ -180,7 +272,7 @@ test("uses confirmed current-location coordinates as the origin for nearby route
   const request = {
     origin: "Current location",
     confirmedCoordinates: { origin },
-    center: "Mandaue City Hall, Cebu",
+    center: "Mandaue City Hall, Mandaue, Cebu, Philippines",
     categories: ["gym"],
     radiusMeters: 1_500,
     mode: "driving",
@@ -212,7 +304,14 @@ test("uses confirmed current-location coordinates as the origin for nearby route
     resolutionState: "USER_CONFIRMED",
     userConfirmed: true,
   });
-  assert.equal(result.routes.length, 1);
+  assert.equal(result.routes.length, 1, JSON.stringify({
+    candidateCount: result.candidateCount,
+    center: result.center,
+    nominatimQueries,
+    photonRequests: photonRequests.map((url) => url.toString()),
+  }));
+  assert.deepEqual(nominatimQueries, ["Mandaue City Hall, Mandaue, Cebu, Philippines"]);
+  assert.equal(photonRequests.length, 1);
   assert.equal(result.routes[0].routeState, "ROUTE_VALIDATED");
   assert.equal(routeRequests.length, 2);
   assert.ok(routeRequests.every((url) => url.pathname.includes("123.941,10.321;")));

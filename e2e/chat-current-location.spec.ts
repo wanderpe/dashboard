@@ -15,6 +15,15 @@ function widgetAnswer(origin: string) {
   ].join("\n");
 }
 
+function nearbyWidgetAnswer(center: string) {
+  return [
+    "Here are nearby stores.",
+    "```cartman-widget",
+    JSON.stringify({ type: "nearby-map", center, categories: ["store"], radiusMeters: 500 }),
+    "```",
+  ].join("\n");
+}
+
 async function mockAuthenticatedSession(page: Page) {
   await page.route("**/api/account-auth/session**", (route) =>
     route.fulfill({
@@ -67,6 +76,23 @@ async function installGeolocation(page: Page) {
 
 function installChatResponse(page: Page, origin: string, requests: Array<Record<string, unknown>>) {
   const answer = widgetAnswer(origin);
+  return page.route("**/api/chat", (route) => {
+    requests.push(route.request().postDataJSON() as Record<string, unknown>);
+    return route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+      body: [
+        sseFrame({ choices: [{ delta: { content: answer }, finish_reason: null }] }),
+        sseFrame({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+  });
+}
+
+function installNearbyChatResponse(page: Page, center: string, requests: Array<Record<string, unknown>>) {
+  const answer = nearbyWidgetAnswer(center);
   return page.route("**/api/chat", (route) => {
     requests.push(route.request().postDataJSON() as Record<string, unknown>);
     return route.fulfill({
@@ -136,14 +162,14 @@ test("uses browser location for destination-only routes after opt-in and keeps c
   installMapRouteResponse(page, mapRequests);
 
   await page.goto("/chat");
-  const useLocationButton = page.getByRole("button", { name: "Use my location for routes" });
+  const useLocationButton = page.getByRole("button", { name: "Use my location for routes and nearby searches" });
   await expect(useLocationButton).toBeVisible();
-  await expect(page.getByText(/coordinates are sent to the map-routing provider.*OSRM.*not sent to AI chat or saved chat history/i)).toBeVisible();
+  await expect(page.getByText(/coordinates are sent to Photon\/OpenStreetMap.*OSRM.*not sent to AI chat or saved chat\/location context/i)).toBeVisible();
   expect(await geolocationRequestCount(page)).toBe(0);
 
   await useLocationButton.click();
-  await expect(page.getByRole("status", { name: "Route origin location" })).toContainText(
-    "Using your location as the default route start",
+  await expect(page.getByRole("status", { name: "Current location" })).toContainText(
+    "Using your location for routes and nearby searches",
   );
   expect(await geolocationRequestCount(page)).toBe(1);
 
@@ -168,14 +194,14 @@ test("uses browser location for destination-only routes after opt-in and keeps c
   expect(storedSession).not.toContain("123.941");
 
   await page.reload();
-  await expect(page.getByRole("button", { name: "Use my location for routes" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Use my location for routes and nearby searches" })).toBeVisible();
   await expect(
     page.getByText(/enable location.*calculate this route/i).first(),
   ).toBeVisible();
   expect(await geolocationRequestCount(page)).toBe(0);
   expect(mapRequests).toHaveLength(1);
 
-  await page.getByRole("button", { name: "Use my location for routes" }).click();
+  await page.getByRole("button", { name: "Use my location for routes and nearby searches" }).click();
   await expect.poll(() => mapRequests.length).toBe(2);
   expect(mapRequests[1]).toMatchObject({
     origin: "Current location",
@@ -192,9 +218,9 @@ test("does not replace a route origin explicitly named by the user", async ({ pa
   installMapRouteResponse(page, mapRequests);
 
   await page.goto("/chat");
-  await page.getByRole("button", { name: "Use my location for routes" }).click();
-  await expect(page.getByRole("status", { name: "Route origin location" })).toContainText(
-    "Using your location as the default route start",
+  await page.getByRole("button", { name: "Use my location for routes and nearby searches" }).click();
+  await expect(page.getByRole("status", { name: "Current location" })).toContainText(
+    "Using your location for routes and nearby searches",
   );
 
   await page.getByRole("textbox", { name: "Message Eric" }).fill("Route from Seattle to Portland");
@@ -293,7 +319,7 @@ test("uses the opted-in location for nearby route comparisons", async ({ page })
   });
 
   await page.goto("/chat");
-  const useLocationButton = page.getByRole("button", { name: "Use my location for routes" });
+  const useLocationButton = page.getByRole("button", { name: "Use my location for routes and nearby searches" });
   await expect(useLocationButton).toBeVisible();
   expect(await geolocationRequestCount(page)).toBe(0);
   await page.getByRole("textbox", { name: "Message Eric" }).fill("Find gyms and compare routes from here.");
@@ -321,7 +347,7 @@ test("uses the opted-in location for nearby route comparisons", async ({ page })
   await expect(nearbyCard.getByRole("button", { name: /Sample Gym/ })).toHaveCount(0);
   expect(comparisonRequests).toHaveLength(1);
 
-  await page.getByRole("button", { name: "Use my location for routes" }).click();
+  await page.getByRole("button", { name: "Use my location for routes and nearby searches" }).click();
   await expect.poll(() => comparisonRequests.length).toBe(2);
   await secondComparisonStarted;
   try {
@@ -528,8 +554,8 @@ test("clears current location and saved chat as soon as sign-out starts", async 
   });
 
   await page.goto("/chat");
-  await page.getByRole("button", { name: "Use my location for routes" }).click();
-  await expect(page.getByRole("status", { name: "Route origin location" })).toBeVisible();
+  await page.getByRole("button", { name: "Use my location for routes and nearby searches" }).click();
+  await expect(page.getByRole("status", { name: "Current location" })).toBeVisible();
   await page.getByRole("textbox", { name: "Message Eric" }).fill("Route from Seattle to Portland");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("region", { name: "Route planner" })).toBeVisible();
@@ -564,4 +590,89 @@ test("clears current location and saved chat as soon as sign-out starts", async 
   } finally {
     releaseLogout?.();
   }
+});
+
+test("blocks current-location nearby searches until opt-in and clears their results on opt-out", async ({ page }) => {
+  const chatRequests: Array<Record<string, unknown>> = [];
+  const nearbyRequests: Array<Record<string, unknown>> = [];
+  const centerPoint = { lat: 10.321, lon: 123.941 };
+  await installGeolocation(page);
+  await mockAuthenticatedSession(page);
+  installNearbyChatResponse(page, "Current location", chatRequests);
+  await page.route("**/api/map-nearby", (route) => {
+    const request = route.request().postDataJSON() as Record<string, unknown>;
+    nearbyRequests.push(request);
+    const confirmed = (request.confirmedCoordinates as { center?: { lat: number; lon: number } } | undefined)?.center;
+    const resultCenter = confirmed
+      ? {
+          label: "User-confirmed pin for Current location",
+          ...confirmed,
+          source: "map_pin",
+          resolutionState: "USER_CONFIRMED",
+          userConfirmed: true,
+        }
+      : {
+          label: "Current location",
+          ...centerPoint,
+          source: "nominatim",
+          resolutionState: "RESOLVED",
+          userConfirmed: false,
+        };
+    return route.fulfill({
+      json: {
+        center: resultCenter,
+        radiusMeters: request.radiusMeters,
+        categories: request.categories,
+        places: [{
+          id: "node/8201",
+          name: "Nearby Market",
+          lat: centerPoint.lat + 0.0001,
+          lon: centerPoint.lon + 0.0001,
+          source: "photon",
+          resolutionState: "RESOLVED",
+          userConfirmed: false,
+          categories: ["store"],
+          straightLineDistanceMeters: 16,
+          address: null,
+        }],
+        truncated: false,
+      },
+    });
+  });
+
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "Message Eric" }).fill("Find stores near me within 500 meters.");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const nearbyCard = page.getByRole("region", { name: "Nearby places", exact: true });
+  const locationPrompt = "Enable location in the chat controls above to search near your current location.";
+  await expect(nearbyCard.getByText(locationPrompt, { exact: true })).toBeVisible();
+  expect(nearbyRequests).toHaveLength(0);
+  expect(chatRequests).toHaveLength(1);
+  expect(chatRequests[0].routeOriginPreference).toBeUndefined();
+
+  await page.getByRole("button", { name: "Use my location for routes and nearby searches" }).click();
+  await expect(page.getByRole("status", { name: "Current location" })).toBeVisible();
+  await expect(nearbyCard.getByText("Nearby Market", { exact: true })).toBeVisible();
+  expect(nearbyRequests).toHaveLength(1);
+  expect(nearbyRequests[0]).toEqual({
+    center: "Current location",
+    categories: ["store"],
+    radiusMeters: 500,
+    confirmedCoordinates: { center: centerPoint },
+  });
+  expect(JSON.stringify(chatRequests[0])).not.toContain(String(centerPoint.lat));
+  const savedSession = await page.evaluate(() => {
+    const values = Array.from({ length: sessionStorage.length }, (_, index) => {
+      const key = sessionStorage.key(index);
+      return key ? `${key}=${sessionStorage.getItem(key)}` : "";
+    });
+    return values.join("\n");
+  });
+  expect(savedSession).not.toContain(String(centerPoint.lat));
+
+  await page.getByRole("button", { name: "Clear location" }).click();
+  await expect(nearbyCard.getByText(locationPrompt, { exact: true })).toBeVisible();
+  await expect(nearbyCard.getByText("Nearby Market", { exact: true })).toHaveCount(0);
+  expect(nearbyRequests).toHaveLength(1);
 });

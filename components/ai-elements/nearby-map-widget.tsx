@@ -78,6 +78,7 @@ type ComparisonState = {
   status: "loading" | "ready" | "error";
   errorMessage: string;
   originCoordinates: { lat: number; lon: number } | null;
+  centerCoordinates: { lat: number; lon: number } | null;
 };
 const NearbyMapCanvas = dynamic(
   () => import("./mapcn-map-renderer").then((module) => module.NearbyMapRenderer),
@@ -131,16 +132,29 @@ function formatDuration(seconds: number) {
   return remainder ? `${hours} h ${remainder} min` : `${hours} h`;
 }
 
-function isNearbyResult(value: unknown): value is NearbyResult {
+function isNearbyResult(value: unknown, confirmedCenter: { lat: number; lon: number } | null = null): value is NearbyResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const result = value as Partial<NearbyResult>;
+  const centerIsValid = confirmedCenter
+    ? Boolean(
+        result.center &&
+        result.center.source === "map_pin" &&
+        result.center.resolutionState === "USER_CONFIRMED" &&
+        result.center.userConfirmed === true &&
+        result.center.lat === confirmedCenter.lat &&
+        result.center.lon === confirmedCenter.lon,
+      )
+    : Boolean(
+        result.center &&
+        result.center.source === "nominatim" &&
+        result.center.resolutionState === "RESOLVED" &&
+        result.center.userConfirmed === false,
+      );
   return Boolean(
     result.center &&
       typeof result.center.label === "string" &&
       isValidLocationPoint(result.center) &&
-      result.center.source === "nominatim" &&
-      result.center.resolutionState === "RESOLVED" &&
-      result.center.userConfirmed === false &&
+      centerIsValid &&
       Number.isInteger(result.radiusMeters) &&
       typeof result.truncated === "boolean" &&
       Array.isArray(result.places) &&
@@ -165,23 +179,40 @@ function isValidLocationPoint(value: unknown): value is { lat: number; lon: numb
     typeof point.lon === "number" && Number.isFinite(point.lon) && point.lon >= -180 && point.lon <= 180;
 }
 
-function isRouteComparisonResult(value: unknown, allowConfirmedOrigin: boolean): value is RouteComparisonResult {
+function isConfirmedMapPin(value: unknown, expected: { lat: number; lon: number } | null): value is NearbyCenter {
+  if (!expected || !value || typeof value !== "object" || Array.isArray(value)) return false;
+  const place = value as NearbyCenter;
+  return typeof place.label === "string" &&
+    isValidLocationPoint(value) &&
+    place.lat === expected.lat &&
+    place.lon === expected.lon &&
+    place.source === "map_pin" &&
+    place.resolutionState === "USER_CONFIRMED" &&
+    place.userConfirmed === true;
+}
+
+function isGeocodedPlace(value: unknown): value is NearbyCenter {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const place = value as NearbyCenter;
+  return typeof place.label === "string" && isValidLocationPoint(value) &&
+    place.source === "nominatim" && place.userConfirmed === false;
+}
+
+function isRouteComparisonResult(
+  value: unknown,
+  confirmedOrigin: { lat: number; lon: number } | null,
+  confirmedCenter: { lat: number; lon: number } | null,
+): value is RouteComparisonResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const result = value as Partial<RouteComparisonResult>;
-  const isValidPlace = (place: unknown) => Boolean(
-    place && typeof place === "object" && !Array.isArray(place) &&
-    typeof (place as NearbyCenter).label === "string" && isValidLocationPoint(place) &&
-    (place as NearbyCenter).source === "nominatim" && (place as NearbyCenter).userConfirmed === false,
-  );
-  const isValidOrigin = (place: unknown) => isValidPlace(place) || (allowConfirmedOrigin && Boolean(
-    place && typeof place === "object" && !Array.isArray(place) &&
-    typeof (place as NearbyCenter).label === "string" && isValidLocationPoint(place) &&
-    (place as NearbyCenter).source === "map_pin" &&
-    (place as NearbyCenter).resolutionState === "USER_CONFIRMED" &&
-    (place as NearbyCenter).userConfirmed === true,
-  ));
+  const validOrigin = confirmedOrigin
+    ? isConfirmedMapPin(result.origin, confirmedOrigin)
+    : isGeocodedPlace(result.origin);
+  const validCenter = confirmedCenter
+    ? isConfirmedMapPin(result.center, confirmedCenter)
+    : isGeocodedPlace(result.center);
   return Boolean(
-    isValidOrigin(result.origin) && isValidPlace(result.center) &&
+    validOrigin && validCenter &&
     Array.isArray(result.categories) && result.categories.length > 0 &&
     Number.isInteger(result.radiusMeters) &&
     ["driving", "walking", "cycling"].includes(result.mode ?? "") &&
@@ -245,12 +276,12 @@ export function NearbyPlacesMap({ center, places, route, selectedPlaceId, ariaHi
 export function CartmanNearbyMapWidget({
   widget,
   messageId,
-  routeOriginCoordinates = null,
+  currentLocationCoordinates = null,
   onLocationContextChange,
 }: {
   widget: NearbyMapWidgetData;
   messageId: string;
-  routeOriginCoordinates?: { lat: number; lon: number } | null;
+  currentLocationCoordinates?: { lat: number; lon: number } | null;
   onLocationContextChange?: LocationContextChangeHandler;
 }) {
   const radiusId = useId();
@@ -272,6 +303,7 @@ export function CartmanNearbyMapWidget({
     status: "loading",
     errorMessage: "",
     originCoordinates: null,
+    centerCoordinates: null,
   });
   const [searchState, setSearchState] = useState<{
     requestKey: string;
@@ -283,7 +315,34 @@ export function CartmanNearbyMapWidget({
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const categoriesKey = categories.join("|");
-  const requestKey = JSON.stringify([widget.center, categoriesKey, radiusMeters, retryCount]);
+  const currentLocationIsNearbyCenter = isCurrentLocationOriginLabel(widget.center);
+  const nearbyCenterLat = currentLocationIsNearbyCenter ? currentLocationCoordinates?.lat : undefined;
+  const nearbyCenterLon = currentLocationIsNearbyCenter ? currentLocationCoordinates?.lon : undefined;
+  const currentNearbyCenterCoordinates = useMemo(() => {
+    if (
+      typeof nearbyCenterLat !== "number" || !Number.isFinite(nearbyCenterLat) || nearbyCenterLat < -90 || nearbyCenterLat > 90 ||
+      typeof nearbyCenterLon !== "number" || !Number.isFinite(nearbyCenterLon) || nearbyCenterLon < -180 || nearbyCenterLon > 180
+    ) return null;
+    return { lat: nearbyCenterLat, lon: nearbyCenterLon };
+  }, [nearbyCenterLat, nearbyCenterLon]);
+  const requestKey = JSON.stringify([
+    widget.center,
+    categoriesKey,
+    radiusMeters,
+    currentLocationIsNearbyCenter ? currentNearbyCenterCoordinates : null,
+    retryCount,
+  ]);
+  const missingNearbyLocationError = "Enable location in the chat controls above to search near your current location.";
+  const needsCurrentLocationForNearby = currentLocationIsNearbyCenter && currentNearbyCenterCoordinates === null;
+  if (
+    needsCurrentLocationForNearby &&
+    (resultSession !== null || searchState.requestKey !== requestKey || searchState.status !== "error" || selectedPlaceId !== null)
+  ) {
+    setResultSession(null);
+    setSearchState({ requestKey, status: "error", errorMessage: missingNearbyLocationError });
+    setSelectedPlaceId(null);
+    setTileError(false);
+  }
   const result = resultSession?.requestKey === requestKey ? resultSession.result : null;
   const status = searchState.requestKey === requestKey ? searchState.status : "loading";
   const errorMessage = searchState.requestKey === requestKey ? searchState.errorMessage : "";
@@ -291,8 +350,8 @@ export function CartmanNearbyMapWidget({
   const currentLocationIsRouteOrigin = Boolean(
     widget.routeOrigin && isCurrentLocationOriginLabel(widget.routeOrigin),
   );
-  const routeOriginLat = currentLocationIsRouteOrigin ? routeOriginCoordinates?.lat : undefined;
-  const routeOriginLon = currentLocationIsRouteOrigin ? routeOriginCoordinates?.lon : undefined;
+  const routeOriginLat = currentLocationIsRouteOrigin ? currentLocationCoordinates?.lat : undefined;
+  const routeOriginLon = currentLocationIsRouteOrigin ? currentLocationCoordinates?.lon : undefined;
   const currentRouteOriginCoordinates = useMemo(() => {
     if (
       typeof routeOriginLat !== "number" || !Number.isFinite(routeOriginLat) || routeOriginLat < -90 || routeOriginLat > 90 ||
@@ -300,33 +359,40 @@ export function CartmanNearbyMapWidget({
     ) return null;
     return { lat: routeOriginLat, lon: routeOriginLon };
   }, [routeOriginLat, routeOriginLon]);
-  const hasValidCurrentLocationCoordinates = currentLocationIsRouteOrigin && currentRouteOriginCoordinates !== null;
+  const hasValidCurrentLocationOriginCoordinates = currentLocationIsRouteOrigin && currentRouteOriginCoordinates !== null;
+  const hasValidCurrentLocationCenterCoordinates = currentLocationIsNearbyCenter && currentNearbyCenterCoordinates !== null;
   const comparisonRequestKey = JSON.stringify([
     requestKey,
     widget.routeOrigin ?? "",
     routeMode,
-    hasValidCurrentLocationCoordinates ? currentRouteOriginCoordinates : null,
+    currentLocationIsRouteOrigin ? currentRouteOriginCoordinates : null,
+    currentLocationIsNearbyCenter ? currentNearbyCenterCoordinates : null,
   ]);
   const comparisonMatchesCurrentRequest = comparisonState.requestKey === comparisonRequestKey &&
-    (!currentLocationIsRouteOrigin || comparisonState.originCoordinates === currentRouteOriginCoordinates);
+    (!currentLocationIsRouteOrigin || comparisonState.originCoordinates === currentRouteOriginCoordinates) &&
+    (!currentLocationIsNearbyCenter || comparisonState.centerCoordinates === currentNearbyCenterCoordinates);
+  const missingCurrentLocationOriginError = "Enable location in the chat controls above to compare routes from your current location.";
+  const missingCurrentLocationForComparison =
+    (currentLocationIsRouteOrigin && !hasValidCurrentLocationOriginCoordinates) ||
+    (currentLocationIsNearbyCenter && !hasValidCurrentLocationCenterCoordinates);
+  const comparisonNeedsLocation = status === "ready" && missingCurrentLocationForComparison;
   if (
-    currentLocationIsRouteOrigin && !hasValidCurrentLocationCoordinates &&
-    (comparisonResult !== null || comparisonState.requestKey !== "" || comparisonState.originCoordinates !== null || selectedRouteId !== null)
+    missingCurrentLocationForComparison &&
+    (comparisonResult !== null || comparisonState.requestKey !== "" || comparisonState.originCoordinates !== null || comparisonState.centerCoordinates !== null || selectedRouteId !== null)
   ) {
     setComparisonResult(null);
-    setComparisonState({ requestKey: "", status: "loading", errorMessage: "", originCoordinates: null });
+    setComparisonState({ requestKey: "", status: "loading", errorMessage: "", originCoordinates: null, centerCoordinates: null });
     setSelectedRouteId(null);
   }
-  const missingCurrentLocationError = "Enable location in the chat controls above to compare routes from your current location.";
-  const comparisonNeedsLocation = currentLocationIsRouteOrigin && status === "ready" &&
-    !hasValidCurrentLocationCoordinates;
   const comparisonStatus = comparisonNeedsLocation
     ? "error"
     : comparisonMatchesCurrentRequest
       ? comparisonState.status
       : "loading";
   const comparisonError = comparisonNeedsLocation
-    ? missingCurrentLocationError
+    ? currentLocationIsNearbyCenter && !hasValidCurrentLocationCenterCoordinates
+      ? missingNearbyLocationError
+      : missingCurrentLocationOriginError
     : comparisonMatchesCurrentRequest
       ? comparisonState.errorMessage
       : "";
@@ -339,7 +405,7 @@ export function CartmanNearbyMapWidget({
     : status === "error"
       ? "FAILED"
       : result
-        ? "RESOLVED"
+        ? result.center.resolutionState === "USER_CONFIRMED" ? "USER_CONFIRMED" : "RESOLVED"
         : "UNRESOLVED";
 
   useEffect(() => {
@@ -347,10 +413,19 @@ export function CartmanNearbyMapWidget({
     const sequence = ++requestSequenceRef.current;
     const selectedCategories = categoriesKey.split("|").filter(isNearbyCategory);
 
+    if (needsCurrentLocationForNearby) return () => controller.abort();
+
     void fetch("/api/map-nearby", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ center: widget.center, categories: selectedCategories, radiusMeters }),
+      body: JSON.stringify({
+        center: widget.center,
+        categories: selectedCategories,
+        radiusMeters,
+        ...(currentLocationIsNearbyCenter && currentNearbyCenterCoordinates
+          ? { confirmedCoordinates: { center: currentNearbyCenterCoordinates } }
+          : {}),
+      }),
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -364,7 +439,9 @@ export function CartmanNearbyMapWidget({
               : "Could not search nearby places.";
           throw new Error(message);
         }
-        if (!isNearbyResult(body)) throw new Error("Nearby places returned an invalid response.");
+        if (!isNearbyResult(body, currentLocationIsNearbyCenter ? currentNearbyCenterCoordinates : null)) {
+          throw new Error("Nearby places returned an invalid response.");
+        }
         if (sequence === requestSequenceRef.current) {
           setResultSession({ requestKey, result: body });
           setSearchState({ requestKey, status: "ready", errorMessage: "" });
@@ -381,14 +458,35 @@ export function CartmanNearbyMapWidget({
       });
 
     return () => controller.abort();
-  }, [widget.center, categoriesKey, radiusMeters, retryCount, requestKey]);
+  }, [
+    widget.center,
+    categoriesKey,
+    radiusMeters,
+    retryCount,
+    requestKey,
+    currentLocationIsNearbyCenter,
+    currentNearbyCenterCoordinates,
+    needsCurrentLocationForNearby,
+    missingNearbyLocationError,
+  ]);
 
   useEffect(() => {
     if (!widget.routeOrigin || status !== "ready") return;
     const sequence = ++comparisonSequenceRef.current;
-    if (currentLocationIsRouteOrigin && !hasValidCurrentLocationCoordinates) return;
+    if (
+      (currentLocationIsRouteOrigin && !hasValidCurrentLocationOriginCoordinates) ||
+      (currentLocationIsNearbyCenter && !hasValidCurrentLocationCenterCoordinates)
+    ) return;
     const controller = new AbortController();
     const selectedCategories = categoriesKey.split("|").filter(isNearbyCategory);
+    const confirmedCoordinates = {
+      ...(currentLocationIsRouteOrigin && currentRouteOriginCoordinates
+        ? { origin: currentRouteOriginCoordinates }
+        : {}),
+      ...(currentLocationIsNearbyCenter && currentNearbyCenterCoordinates
+        ? { center: currentNearbyCenterCoordinates }
+        : {}),
+    };
     void fetch("/api/map-route/compare", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -398,9 +496,7 @@ export function CartmanNearbyMapWidget({
         categories: selectedCategories,
         radiusMeters,
         mode: routeMode,
-        ...(currentLocationIsRouteOrigin && currentRouteOriginCoordinates
-          ? { confirmedCoordinates: { origin: currentRouteOriginCoordinates } }
-          : {}),
+        ...(Object.keys(confirmedCoordinates).length > 0 ? { confirmedCoordinates } : {}),
       }),
       signal: controller.signal,
     })
@@ -415,8 +511,12 @@ export function CartmanNearbyMapWidget({
               : "Could not compare routes to nearby places.";
           throw new Error(message);
         }
-        if (!isRouteComparisonResult(body, currentLocationIsRouteOrigin) || body.mode !== routeMode ||
-            body.radiusMeters !== radiusMeters || body.categories.join("|") !== selectedCategories.join("|")) {
+        if (!isRouteComparisonResult(
+          body,
+          currentLocationIsRouteOrigin ? currentRouteOriginCoordinates : null,
+          currentLocationIsNearbyCenter ? currentNearbyCenterCoordinates : null,
+        ) || body.mode !== routeMode || body.radiusMeters !== radiusMeters ||
+            body.categories.join("|") !== selectedCategories.join("|")) {
           throw new Error("Route comparison returned an invalid response.");
         }
         if (sequence === comparisonSequenceRef.current) {
@@ -426,6 +526,7 @@ export function CartmanNearbyMapWidget({
             status: "ready",
             errorMessage: "",
             originCoordinates: currentLocationIsRouteOrigin ? currentRouteOriginCoordinates : null,
+            centerCoordinates: currentLocationIsNearbyCenter ? currentNearbyCenterCoordinates : null,
           });
           setSelectedRouteId(body.routes.find((route) => route.routeState === "ROUTE_VALIDATED")?.id ?? null);
         }
@@ -437,6 +538,7 @@ export function CartmanNearbyMapWidget({
           status: "error",
           errorMessage: error instanceof Error ? error.message : "Could not compare routes to nearby places.",
           originCoordinates: currentLocationIsRouteOrigin ? currentRouteOriginCoordinates : null,
+          centerCoordinates: currentLocationIsNearbyCenter ? currentNearbyCenterCoordinates : null,
         });
         setComparisonResult(null);
         setSelectedRouteId(null);
@@ -452,8 +554,11 @@ export function CartmanNearbyMapWidget({
     status,
     comparisonRequestKey,
     currentLocationIsRouteOrigin,
-    hasValidCurrentLocationCoordinates,
+    currentLocationIsNearbyCenter,
+    hasValidCurrentLocationOriginCoordinates,
+    hasValidCurrentLocationCenterCoordinates,
     currentRouteOriginCoordinates,
+    currentNearbyCenterCoordinates,
   ]);
 
   useEffect(() => {
@@ -591,10 +696,12 @@ export function CartmanNearbyMapWidget({
             <div className="max-w-sm text-center">
               <p className="text-sm font-medium text-foreground">Couldn’t load nearby places</p>
               <p className="mt-1 text-sm text-muted-foreground">{errorMessage}</p>
-              <Button type="button" variant="outline" className="mt-3 min-h-11" onClick={() => setRetryCount((count) => count + 1)}>
-                <RotateCcw className="size-4" aria-hidden="true" />
-                Try again
-              </Button>
+              {!needsCurrentLocationForNearby ? (
+                <Button type="button" variant="outline" className="mt-3 min-h-11" onClick={() => setRetryCount((count) => count + 1)}>
+                  <RotateCcw className="size-4" aria-hidden="true" />
+                  Try again
+                </Button>
+              ) : null}
             </div>
             <a
               href="https://www.openstreetmap.org/copyright"
