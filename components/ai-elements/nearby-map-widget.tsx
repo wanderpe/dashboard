@@ -7,9 +7,10 @@ import { LoaderCircle, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MAP_NEARBY_CATEGORIES } from "@/lib/map-nearby-categories.mjs";
 import type { LocationContextChangeHandler, LocationResolutionState } from "@/lib/location-context-types";
+import { isCurrentLocationOriginLabel } from "@/lib/route-map-request.mjs";
 
 type NearbyCategory = keyof typeof MAP_NEARBY_CATEGORIES;
-type LocationSource = "nominatim" | "photon";
+type LocationSource = "nominatim" | "photon" | "map_pin";
 type LocationState = "RESOLVED" | "USER_CONFIRMED" | "ROUTE_VALIDATED";
 type NearbyPlace = {
   id: string;
@@ -76,6 +77,7 @@ type ComparisonState = {
   requestKey: string;
   status: "loading" | "ready" | "error";
   errorMessage: string;
+  originCoordinates: { lat: number; lon: number } | null;
 };
 const NearbyMapCanvas = dynamic(
   () => import("./mapcn-map-renderer").then((module) => module.NearbyMapRenderer),
@@ -163,7 +165,7 @@ function isValidLocationPoint(value: unknown): value is { lat: number; lon: numb
     typeof point.lon === "number" && Number.isFinite(point.lon) && point.lon >= -180 && point.lon <= 180;
 }
 
-function isRouteComparisonResult(value: unknown): value is RouteComparisonResult {
+function isRouteComparisonResult(value: unknown, allowConfirmedOrigin: boolean): value is RouteComparisonResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const result = value as Partial<RouteComparisonResult>;
   const isValidPlace = (place: unknown) => Boolean(
@@ -171,8 +173,15 @@ function isRouteComparisonResult(value: unknown): value is RouteComparisonResult
     typeof (place as NearbyCenter).label === "string" && isValidLocationPoint(place) &&
     (place as NearbyCenter).source === "nominatim" && (place as NearbyCenter).userConfirmed === false,
   );
+  const isValidOrigin = (place: unknown) => isValidPlace(place) || (allowConfirmedOrigin && Boolean(
+    place && typeof place === "object" && !Array.isArray(place) &&
+    typeof (place as NearbyCenter).label === "string" && isValidLocationPoint(place) &&
+    (place as NearbyCenter).source === "map_pin" &&
+    (place as NearbyCenter).resolutionState === "USER_CONFIRMED" &&
+    (place as NearbyCenter).userConfirmed === true,
+  ));
   return Boolean(
-    isValidPlace(result.origin) && isValidPlace(result.center) &&
+    isValidOrigin(result.origin) && isValidPlace(result.center) &&
     Array.isArray(result.categories) && result.categories.length > 0 &&
     Number.isInteger(result.radiusMeters) &&
     ["driving", "walking", "cycling"].includes(result.mode ?? "") &&
@@ -236,10 +245,12 @@ export function NearbyPlacesMap({ center, places, route, selectedPlaceId, ariaHi
 export function CartmanNearbyMapWidget({
   widget,
   messageId,
+  routeOriginCoordinates = null,
   onLocationContextChange,
 }: {
   widget: NearbyMapWidgetData;
   messageId: string;
+  routeOriginCoordinates?: { lat: number; lon: number } | null;
   onLocationContextChange?: LocationContextChangeHandler;
 }) {
   const radiusId = useId();
@@ -260,6 +271,7 @@ export function CartmanNearbyMapWidget({
     requestKey: "",
     status: "loading",
     errorMessage: "",
+    originCoordinates: null,
   });
   const [searchState, setSearchState] = useState<{
     requestKey: string;
@@ -276,9 +288,48 @@ export function CartmanNearbyMapWidget({
   const status = searchState.requestKey === requestKey ? searchState.status : "loading";
   const errorMessage = searchState.requestKey === requestKey ? searchState.errorMessage : "";
   const routeMode = widget.routeMode ?? "driving";
-  const comparisonRequestKey = JSON.stringify([requestKey, widget.routeOrigin ?? "", routeMode]);
-  const comparisonStatus = comparisonState.requestKey === comparisonRequestKey ? comparisonState.status : "loading";
-  const comparisonError = comparisonState.requestKey === comparisonRequestKey ? comparisonState.errorMessage : "";
+  const currentLocationIsRouteOrigin = Boolean(
+    widget.routeOrigin && isCurrentLocationOriginLabel(widget.routeOrigin),
+  );
+  const routeOriginLat = currentLocationIsRouteOrigin ? routeOriginCoordinates?.lat : undefined;
+  const routeOriginLon = currentLocationIsRouteOrigin ? routeOriginCoordinates?.lon : undefined;
+  const currentRouteOriginCoordinates = useMemo(() => {
+    if (
+      typeof routeOriginLat !== "number" || !Number.isFinite(routeOriginLat) || routeOriginLat < -90 || routeOriginLat > 90 ||
+      typeof routeOriginLon !== "number" || !Number.isFinite(routeOriginLon) || routeOriginLon < -180 || routeOriginLon > 180
+    ) return null;
+    return { lat: routeOriginLat, lon: routeOriginLon };
+  }, [routeOriginLat, routeOriginLon]);
+  const hasValidCurrentLocationCoordinates = currentLocationIsRouteOrigin && currentRouteOriginCoordinates !== null;
+  const comparisonRequestKey = JSON.stringify([
+    requestKey,
+    widget.routeOrigin ?? "",
+    routeMode,
+    hasValidCurrentLocationCoordinates ? currentRouteOriginCoordinates : null,
+  ]);
+  const comparisonMatchesCurrentRequest = comparisonState.requestKey === comparisonRequestKey &&
+    (!currentLocationIsRouteOrigin || comparisonState.originCoordinates === currentRouteOriginCoordinates);
+  if (
+    currentLocationIsRouteOrigin && !hasValidCurrentLocationCoordinates &&
+    (comparisonResult !== null || comparisonState.requestKey !== "" || comparisonState.originCoordinates !== null || selectedRouteId !== null)
+  ) {
+    setComparisonResult(null);
+    setComparisonState({ requestKey: "", status: "loading", errorMessage: "", originCoordinates: null });
+    setSelectedRouteId(null);
+  }
+  const missingCurrentLocationError = "Enable location in the chat controls above to compare routes from your current location.";
+  const comparisonNeedsLocation = currentLocationIsRouteOrigin && status === "ready" &&
+    !hasValidCurrentLocationCoordinates;
+  const comparisonStatus = comparisonNeedsLocation
+    ? "error"
+    : comparisonMatchesCurrentRequest
+      ? comparisonState.status
+      : "loading";
+  const comparisonError = comparisonNeedsLocation
+    ? missingCurrentLocationError
+    : comparisonMatchesCurrentRequest
+      ? comparisonState.errorMessage
+      : "";
   const contextCandidateNames = status === "ready" && result
     ? result.places.map((place) => place.name)
     : [];
@@ -334,8 +385,9 @@ export function CartmanNearbyMapWidget({
 
   useEffect(() => {
     if (!widget.routeOrigin || status !== "ready") return;
-    const controller = new AbortController();
     const sequence = ++comparisonSequenceRef.current;
+    if (currentLocationIsRouteOrigin && !hasValidCurrentLocationCoordinates) return;
+    const controller = new AbortController();
     const selectedCategories = categoriesKey.split("|").filter(isNearbyCategory);
     void fetch("/api/map-route/compare", {
       method: "POST",
@@ -346,6 +398,9 @@ export function CartmanNearbyMapWidget({
         categories: selectedCategories,
         radiusMeters,
         mode: routeMode,
+        ...(currentLocationIsRouteOrigin && currentRouteOriginCoordinates
+          ? { confirmedCoordinates: { origin: currentRouteOriginCoordinates } }
+          : {}),
       }),
       signal: controller.signal,
     })
@@ -360,13 +415,18 @@ export function CartmanNearbyMapWidget({
               : "Could not compare routes to nearby places.";
           throw new Error(message);
         }
-        if (!isRouteComparisonResult(body) || body.mode !== routeMode ||
+        if (!isRouteComparisonResult(body, currentLocationIsRouteOrigin) || body.mode !== routeMode ||
             body.radiusMeters !== radiusMeters || body.categories.join("|") !== selectedCategories.join("|")) {
           throw new Error("Route comparison returned an invalid response.");
         }
         if (sequence === comparisonSequenceRef.current) {
           setComparisonResult(body);
-          setComparisonState({ requestKey: comparisonRequestKey, status: "ready", errorMessage: "" });
+          setComparisonState({
+            requestKey: comparisonRequestKey,
+            status: "ready",
+            errorMessage: "",
+            originCoordinates: currentLocationIsRouteOrigin ? currentRouteOriginCoordinates : null,
+          });
           setSelectedRouteId(body.routes.find((route) => route.routeState === "ROUTE_VALIDATED")?.id ?? null);
         }
       })
@@ -376,13 +436,25 @@ export function CartmanNearbyMapWidget({
           requestKey: comparisonRequestKey,
           status: "error",
           errorMessage: error instanceof Error ? error.message : "Could not compare routes to nearby places.",
+          originCoordinates: currentLocationIsRouteOrigin ? currentRouteOriginCoordinates : null,
         });
         setComparisonResult(null);
         setSelectedRouteId(null);
       });
 
     return () => controller.abort();
-  }, [widget.routeOrigin, widget.center, routeMode, categoriesKey, radiusMeters, status, comparisonRequestKey]);
+  }, [
+    widget.routeOrigin,
+    widget.center,
+    routeMode,
+    categoriesKey,
+    radiusMeters,
+    status,
+    comparisonRequestKey,
+    currentLocationIsRouteOrigin,
+    hasValidCurrentLocationCoordinates,
+    currentRouteOriginCoordinates,
+  ]);
 
   useEffect(() => {
     onLocationContextChange?.(messageId, {
@@ -392,7 +464,9 @@ export function CartmanNearbyMapWidget({
         categories: categoriesKey.split("|").filter(isNearbyCategory),
         radiusMeters,
         candidateNames: JSON.parse(contextCandidateNamesKey) as string[],
-        ...(widget.routeOrigin ? { routeOrigin: widget.routeOrigin, routeMode } : {}),
+        ...(widget.routeOrigin && !currentLocationIsRouteOrigin
+          ? { routeOrigin: widget.routeOrigin, routeMode }
+          : {}),
       },
     });
   }, [
@@ -401,6 +475,7 @@ export function CartmanNearbyMapWidget({
     widget.center,
     widget.routeOrigin,
     routeMode,
+    currentLocationIsRouteOrigin,
     categoriesKey,
     radiusMeters,
     contextCandidateNamesKey,
@@ -409,7 +484,7 @@ export function CartmanNearbyMapWidget({
   const mapResult = result ?? resultSession?.result ?? null;
   const places = result?.places ?? [];
   const selectedPlace = places.find((place) => place.id === selectedPlaceId) ?? null;
-  const currentComparison = comparisonState.requestKey === comparisonRequestKey && comparisonState.status === "ready"
+  const currentComparison = comparisonMatchesCurrentRequest && comparisonState.status === "ready"
     ? comparisonResult
     : null;
   const selectedRoute = currentComparison?.routes.find((route) =>

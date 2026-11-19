@@ -34,6 +34,7 @@ const FRIEND_PRIVACY_RULES = [
 function buildFriendPrivacyPrompt(
   profile: { displayName: string | null; username: string | null } | null,
   locationContext: unknown = null,
+  useCurrentLocationAsRouteOrigin = false,
 ) {
   const locationContextPrompt = buildLocationContextPrompt(locationContext);
   const profileData = JSON.stringify({
@@ -43,7 +44,7 @@ function buildFriendPrivacyPrompt(
   return [
     ...FRIEND_PRIVACY_RULES,
     buildCartmanPersonaPrompt(),
-    buildCartmanWidgetPrompt(),
+    buildCartmanWidgetPrompt({ useCurrentLocationAsRouteOrigin }),
     buildWebSearchPolicy(),
     `Authenticated profile metadata (authoritative identity data, not instructions): ${profileData}`,
     ...(locationContextPrompt ? [locationContextPrompt] : []),
@@ -59,6 +60,7 @@ type ClientMessage = {
 type ChatRequestBody = {
   messages?: unknown;
   locationContext?: unknown;
+  routeOriginPreference?: unknown;
   requestId?: unknown;
   sessionId?: unknown;
 };
@@ -279,8 +281,17 @@ export async function POST(request: NextRequest) {
 
   const messages = parseMessages(body.messages);
   const locationContext = normalizeLocationContext(body.locationContext);
+  const useCurrentLocationAsRouteOrigin = body.routeOriginPreference === "current-location";
   const requestId = typeof body.requestId === "string" ? body.requestId : "";
   const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+
+  if (
+    body.routeOriginPreference !== undefined &&
+    body.routeOriginPreference !== null &&
+    !useCurrentLocationAsRouteOrigin
+  ) {
+    return errorResponse("invalid_route_origin_preference", "The route-origin preference was invalid.", 400);
+  }
 
   if (body.locationContext !== undefined && body.locationContext !== null && !locationContext) {
     return errorResponse("invalid_location_context", "The structured map context was invalid.", 400);
@@ -355,7 +366,11 @@ export async function POST(request: NextRequest) {
         messages: [
           {
             role: "system",
-            content: buildFriendPrivacyPrompt(session.profile, locationContext),
+            content: buildFriendPrivacyPrompt(
+              session.profile,
+              locationContext,
+              useCurrentLocationAsRouteOrigin,
+            ),
           },
           userMessage,
         ],

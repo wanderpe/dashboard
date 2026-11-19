@@ -15,7 +15,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RoutePinMap } from "@/components/ai-elements/route-pin-picker";
-import { coordinatesForCurrentRoute, isValidCoordinates, routeContextForInputs, routeRequestContextMatches, routeSessionMatches } from "@/lib/route-map-request.mjs";
+import { coordinatesForCurrentRoute, isCurrentLocationOriginLabel, isValidCoordinates, routeContextForInputs, routeRequestContextMatches, routeSessionMatches } from "@/lib/route-map-request.mjs";
 import type { LocationContextChangeHandler, LocationResolutionState } from "@/lib/location-context-types";
 
 type TravelMode = "driving" | "walking" | "cycling";
@@ -224,16 +224,31 @@ function endpointLabel(endpoint: Endpoint) {
 export function CartmanRouteMapWidget({
   widget,
   messageId,
+  routeOriginCoordinates = null,
   onLocationContextChange,
 }: {
   widget: RouteMapWidgetData;
   messageId: string;
+  routeOriginCoordinates?: Coordinates | null;
   onLocationContextChange?: LocationContextChangeHandler;
 }) {
+  const effectiveRouteOriginCoordinates =
+    isCurrentLocationOriginLabel(widget.origin) && isValidCoordinates(routeOriginCoordinates)
+      ? routeOriginCoordinates
+      : null;
+  const originCoordinatesKey = effectiveRouteOriginCoordinates
+    ? `${effectiveRouteOriginCoordinates.lat},${effectiveRouteOriginCoordinates.lon}`
+    : "";
   const [mode, setMode] = useState<TravelMode>(widget.mode);
   const [routeDataSession, setRouteDataSession] = useState<RouteResultSession | null>(null);
-  const [status, setStatus] = useState<RouteStatus>("loading");
-  const [errorMessage, setErrorMessage] = useState("");
+  const [storedStatus, setStatus] = useState<RouteStatus>("loading");
+  const [storedErrorMessage, setErrorMessage] = useState("");
+  const missingCurrentLocationOrigin =
+    isCurrentLocationOriginLabel(widget.origin) && !effectiveRouteOriginCoordinates;
+  const status: RouteStatus = missingCurrentLocationOrigin ? "error" : storedStatus;
+  const errorMessage = missingCurrentLocationOrigin
+    ? "Enable location in the chat controls below to calculate this route from your current location."
+    : storedErrorMessage;
   const [tileError, setTileError] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [pinSelectionSession, setPinSelectionSession] = useState<PinSelectionSession | null>(null);
@@ -246,6 +261,7 @@ export function CartmanRouteMapWidget({
   const [draftsByEndpoint, setDraftsByEndpoint] = useState<Partial<Record<Endpoint, PinDraft>>>({});
   const [inputGeneration, setInputGeneration] = useState(0);
   const requestContextRef = useRef({ origin: widget.origin, destination: widget.destination, mode, revision: retryCount, generation: 0 });
+  const previousOriginCoordinatesKeyRef = useRef(originCoordinatesKey);
   const requestCoordinatesRef = useRef<PendingRouteCoordinates | null>(null);
   const routeInputsRef = useRef({ origin: widget.origin, destination: widget.destination });
   const renderContext = {
@@ -279,6 +295,27 @@ export function CartmanRouteMapWidget({
     if (nextContext.generation !== currentContext.generation) setInputGeneration(nextContext.generation);
   }, [widget.origin, widget.destination, mode, retryCount]);
 
+  useLayoutEffect(() => {
+    if (previousOriginCoordinatesKeyRef.current === originCoordinatesKey) return;
+    previousOriginCoordinatesKeyRef.current = originCoordinatesKey;
+    const generation = requestContextRef.current.generation + 1;
+    requestContextRef.current = { ...requestContextRef.current, generation };
+    requestCoordinatesRef.current = null;
+    setInputGeneration(generation);
+    setRouteDataSession(null);
+    setPinSelectionSession(null);
+    setConfirmedCoordinatesSession(null);
+    setActiveEndpoint(null);
+    setDraftCoordinate(null);
+    setDraftNeedsConfirmation({});
+    setDraftsByEndpoint({});
+    setLatitudeInput("");
+    setLongitudeInput("");
+    setTileError(false);
+    setErrorMessage("");
+    setStatus("loading");
+  }, [originCoordinatesKey]);
+
   useEffect(() => {
     onLocationContextChange?.(messageId, {
       kind: "route",
@@ -309,6 +346,7 @@ export function CartmanRouteMapWidget({
     const controller = new AbortController();
     const requestContext = { ...requestContextRef.current };
     const isCurrentRequest = () => routeRequestContextMatches(requestContext, requestContextRef.current);
+    if (missingCurrentLocationOrigin) return () => controller.abort();
     const requestBody: Record<string, unknown> = {
       origin: requestContext.origin,
       destination: requestContext.destination,
@@ -321,8 +359,12 @@ export function CartmanRouteMapWidget({
       requestContext.generation,
     );
     if (requestCoordinatesRef.current && !requestCoordinates) requestCoordinatesRef.current = null;
-    if (requestCoordinates && Object.keys(requestCoordinates).length > 0) {
-      requestBody.confirmedCoordinates = requestCoordinates;
+    const confirmedCoordinatePayload = { ...(requestCoordinates ?? {}) };
+    if (effectiveRouteOriginCoordinates) {
+      confirmedCoordinatePayload.origin = effectiveRouteOriginCoordinates;
+    }
+    if (Object.keys(confirmedCoordinatePayload).length > 0) {
+      requestBody.confirmedCoordinates = confirmedCoordinatePayload;
     }
 
     void fetch("/api/map-route", {
@@ -388,7 +430,7 @@ export function CartmanRouteMapWidget({
       });
 
     return () => controller.abort();
-  }, [widget.origin, widget.destination, retryCount]);
+  }, [widget.origin, widget.destination, originCoordinatesKey, effectiveRouteOriginCoordinates, missingCurrentLocationOrigin, retryCount]);
 
   function chooseMode(nextMode: TravelMode) {
     if (nextMode === mode) return;

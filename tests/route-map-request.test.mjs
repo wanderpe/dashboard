@@ -14,6 +14,18 @@ test("uses confirmed coordinates only for the route inputs they belong to", () =
   assert.equal(coordinatesForCurrentRoute(null, "Old start", "Same destination"), null);
 });
 
+test("recognizes current-location origin labels without matching ordinary place names", () => {
+  const isCurrentLocationOriginLabel = routeMapRequest.isCurrentLocationOriginLabel;
+  assert.equal(typeof isCurrentLocationOriginLabel, "function");
+
+  for (const label of ["Current location", "my current location", "Your location", "here", "where I am"]) {
+    assert.equal(isCurrentLocationOriginLabel(label), true, label);
+  }
+  for (const label of ["Seattle, WA", "Current Location Park", "", null]) {
+    assert.equal(isCurrentLocationOriginLabel(label), false, String(label));
+  }
+});
+
 test("matches pin UI and confirmed state only to the exact route input pair", () => {
   const pinSession = { origin: "Old start", destination: "Old destination" };
 

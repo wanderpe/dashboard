@@ -29,6 +29,16 @@ test("validates a bounded route-comparison request", () => {
   }), null);
 });
 
+test("requires confirmed coordinates for a current-location comparison origin", () => {
+  assert.equal(comparison.parseMapRouteComparisonRequest({
+    origin: "Current location",
+    center: "Mandaue City Hall, Cebu",
+    categories: ["gym"],
+    radiusMeters: 1_500,
+    mode: "driving",
+  }), null);
+});
+
 test("ranks every discovered candidate by OSRM road distance using provider coordinates", async () => {
   assert.equal(typeof comparison.fetchMapRouteComparison, "function");
   const origin = { lat: 10.323, lon: 123.922 };
@@ -127,4 +137,83 @@ test("retains a discovered destination when OSRM cannot route it", async () => {
   assert.equal(result.routes[0].routeState, "FAILED");
   assert.equal(result.routes[0].roadDistanceMeters, null);
   assert.match(result.routes[0].failureReason, /route/i);
+});
+
+test("uses confirmed current-location coordinates as the origin for nearby route comparisons", async () => {
+  const origin = { lat: 10.321, lon: 123.941 };
+  const routeRequests = [];
+  const nominatimQueries = [];
+  const fetchImpl = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "nominatim.openstreetmap.org") {
+      const query = url.searchParams.get("q");
+      nominatimQueries.push(query);
+      if (query !== "Mandaue City Hall, Cebu") {
+        throw new Error(`Unexpected geocoding query ${query}; the current origin should not be geocoded`);
+      }
+      return { ok: true, json: async () => [{
+        lat: "10.335", lon: "123.94", name: "Mandaue City Hall",
+        display_name: "Mandaue City Hall, Mandaue, Cebu, Philippines", type: "townhall", class: "amenity",
+        addresstype: "amenity", address: { city: "Mandaue", province: "Cebu", country: "Philippines" },
+      }] };
+    }
+    if (url.hostname === "photon.test") {
+      return { ok: true, json: async () => ({ features: [{
+        type: "Feature",
+        id: "N/404",
+        properties: { name: "Oakridge Gym", osm_key: "leisure", osm_value: "fitness_centre", osm_type: "N", osm_id: 404 },
+        geometry: { type: "Point", coordinates: [123.95, 10.33] },
+      }] }) };
+    }
+    if (url.hostname === "router.project-osrm.org") {
+      routeRequests.push(url);
+      return { ok: true, json: async () => ({ code: "Ok", routes: [{
+        distance: 3_000,
+        duration: 600,
+        geometry: { type: "LineString", coordinates: [[origin.lon, origin.lat], [123.95, 10.33]] },
+        legs: [],
+      }] }) };
+    }
+    throw new Error(`Unexpected provider ${url.hostname}; the current origin should not be geocoded`);
+  };
+
+  const request = {
+    origin: "Current location",
+    confirmedCoordinates: { origin },
+    center: "Mandaue City Hall, Cebu",
+    categories: ["gym"],
+    radiusMeters: 1_500,
+    mode: "driving",
+  };
+  assert.deepEqual(comparison.parseMapRouteComparisonRequest(request), request);
+  assert.equal(comparison.parseMapRouteComparisonRequest({
+    ...request,
+    confirmedCoordinates: { origin: { lat: 91, lon: 0 } },
+  }), null);
+  assert.equal(comparison.parseMapRouteComparisonRequest({
+    ...request,
+    origin: "Seattle, WA",
+  }), null);
+
+  const options = {
+    fetchImpl,
+    cache: true,
+    nominatimIntervalMs: 0,
+    photonIntervalMs: 0,
+    photonEndpoint: "https://photon.test/reverse",
+  };
+  const result = await comparison.fetchMapRouteComparison(request, options);
+  await comparison.fetchMapRouteComparison(request, options);
+
+  assert.deepEqual(result.origin, {
+    label: "User-confirmed pin for Current location",
+    ...origin,
+    source: "map_pin",
+    resolutionState: "USER_CONFIRMED",
+    userConfirmed: true,
+  });
+  assert.equal(result.routes.length, 1);
+  assert.equal(result.routes[0].routeState, "ROUTE_VALIDATED");
+  assert.equal(routeRequests.length, 2);
+  assert.ok(routeRequests.every((url) => url.pathname.includes("123.941,10.321;")));
 });

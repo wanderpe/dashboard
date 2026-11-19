@@ -697,6 +697,56 @@ test("does not reuse a cached pin route label for different place text", async (
   assert.match(third.destination.label, /Third destination label/);
 });
 
+test("requires confirmed coordinates for a current-location direct-route origin", async () => {
+  let providerRequests = 0;
+  await assert.rejects(
+    mapRoute.fetchMapRoute({ origin: "Current location", destination: "Portland, OR" }, {
+      fetchImpl: async () => {
+        providerRequests += 1;
+        throw new Error("The current-location origin must not be geocoded.");
+      },
+    }),
+    (error) => error.code === "confirmed_coordinates_required",
+  );
+  assert.equal(providerRequests, 0);
+});
+
+test("does not retain route cache entries for current-location coordinates", async () => {
+  const routingRequests = [];
+  const fetchImpl = async (input) => {
+    routingRequests.push(new URL(String(input)));
+    return {
+      ok: true,
+      json: async () => ({
+        code: "Ok",
+        routes: [{
+          distance: 1_000,
+          duration: 180,
+          geometry: {
+            type: "LineString",
+            coordinates: [[-122.654321, 37.123456], [-122.653, 37.124]],
+          },
+          legs: [],
+        }],
+      }),
+    };
+  };
+  const request = {
+    origin: "Current location",
+    destination: "Cache Test Destination 712",
+    mode: "driving",
+    confirmedCoordinates: {
+      origin: { lat: 37.123456, lon: -122.654321 },
+      destination: { lat: 37.124, lon: -122.653 },
+    },
+  };
+
+  await mapRoute.fetchMapRoute(request, { fetchImpl });
+  await mapRoute.fetchMapRoute(request, { fetchImpl });
+
+  assert.equal(routingRequests.length, 2);
+});
+
 async function assertPlaceQueryUnresolved({ query, result, endpoint = "origin" }) {
   let routingRequested = false;
   const fetchImpl = async (input) => {

@@ -123,6 +123,22 @@ test("prompt keeps route comparison, confirmation, metrics, and follow-up state 
   assert.match(prompt, /ask.*which place.*rather than guessing/i);
 });
 
+test("route prompt uses current location only after opt-in and preserves explicit origins", () => {
+  const optedInPrompt = protocol.buildCartmanWidgetPrompt({
+    useCurrentLocationAsRouteOrigin: true,
+  });
+  assert.match(optedInPrompt, /explicitly opted in to browser location/i);
+  assert.match(optedInPrompt, /use the exact origin label "Current location"/i);
+  assert.match(optedInPrompt, /unless the user explicitly names a different origin/i);
+  assert.match(optedInPrompt, /coordinates are not available to you/i);
+  assert.match(optedInPrompt, /takes precedence over previous route-origin context/i);
+  assert.match(optedInPrompt, /route comparison.*nearby-map.*routeOrigin.*Current location/i);
+  assert.match(optedInPrompt, /for follow-ups.*previous structured map context.*current-location origin/i);
+
+  const defaultPrompt = protocol.buildCartmanWidgetPrompt();
+  assert.doesNotMatch(defaultPrompt, /explicitly opted in to browser location/i);
+});
+
 test("rejects unsupported or extra fields instead of treating them as widgets", () => {
   const unsafe = [
     "```cartman-widget",

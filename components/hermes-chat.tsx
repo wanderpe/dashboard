@@ -5,12 +5,13 @@ import {
   LoaderCircle,
   LockKeyhole,
   LogOut,
+  MapPin,
   MessageSquareText,
   Plus,
   RotateCcw,
   Send,
 } from "lucide-react";
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { signIn as authSignIn, signOut as authSignOut } from "next-auth/react";
 
 import { CartmanAvatar } from "@/components/cartman-avatar";
@@ -32,6 +33,7 @@ import { CHAT_SUGGESTIONS, getChatSuggestionPrompt } from "@/lib/chat-suggestion
 import { parseCartmanWidgetContent } from "@/lib/cartman-widget-protocol.mjs";
 import { mergeLocationContext, normalizeLocationContext } from "@/lib/location-context.mjs";
 import type { LocationContext, LocationContextChangeHandler } from "@/lib/location-context-types";
+import { isCurrentLocationOriginLabel, isValidCoordinates } from "@/lib/route-map-request.mjs";
 import {
   normalizeTodoSnapshot,
   normalizeToolProgress,
@@ -50,6 +52,8 @@ type ChatMessage = {
   role: ChatRole;
   content: string;
 };
+
+type CurrentRouteLocation = { lat: number; lon: number; accuracyMeters: number };
 
 function generateUUID(): string {
   if (
@@ -162,10 +166,25 @@ function readStoredLocationContext(): LocationContext | null {
   try {
     const value = sessionStorage.getItem(LOCATION_CONTEXT_KEY);
     const parsed: unknown = value ? JSON.parse(value) : null;
-    return normalizeLocationContext(parsed) as LocationContext | null;
+    return withoutCurrentLocationRouteContext(
+      normalizeLocationContext(parsed) as LocationContext | null,
+    );
   } catch {
     return null;
   }
+}
+
+function withoutCurrentLocationRouteContext(context: LocationContext | null): LocationContext | null {
+  if (!context) return null;
+  const remaining: LocationContext = { ...context };
+  if (remaining.route && isCurrentLocationOriginLabel(remaining.route.origin)) {
+    delete remaining.route;
+  }
+  if (remaining.nearby?.routeOrigin && isCurrentLocationOriginLabel(remaining.nearby.routeOrigin)) {
+    const { center, categories, radiusMeters, candidateNames } = remaining.nearby;
+    remaining.nearby = { center, categories, radiusMeters, candidateNames };
+  }
+  return remaining.route || remaining.nearby ? remaining : null;
 }
 
 function getErrorMessage(value: unknown, fallback: string) {
@@ -232,9 +251,19 @@ export function HermesChat() {
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authenticating, setAuthenticating] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [conversationId, setConversationId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+  const [currentRouteLocation, setCurrentRouteLocation] = useState<CurrentRouteLocation | null>(null);
+  const routeOriginCoordinates = useMemo(
+    () => currentRouteLocation
+      ? { lat: currentRouteLocation.lat, lon: currentRouteLocation.lon }
+      : null,
+    [currentRouteLocation],
+  );
+  const [locatingRouteOrigin, setLocatingRouteOrigin] = useState(false);
+  const [routeLocationError, setRouteLocationError] = useState("");
   const [composer, setComposer] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [activeAssistantMessageId, setActiveAssistantMessageId] =
@@ -248,6 +277,7 @@ export function HermesChat() {
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const routeLocationRequestIdRef = useRef(0);
   const latestLocationWidgetMessageIdRef = useRef<string | null>(null);
   const latestLocationWidgetMessageId = [...messages].reverse().find((message) =>
     message.role === "assistant" &&
@@ -259,7 +289,25 @@ export function HermesChat() {
 
   const handleLocationContextChange = useCallback<LocationContextChangeHandler>((messageId, update) => {
     if (messageId !== latestLocationWidgetMessageIdRef.current) return;
-    setLocationContext((current) => mergeLocationContext(current, update) as LocationContext | null);
+    if (update.kind === "route" && isCurrentLocationOriginLabel(update.value.origin)) {
+      setLocationContext((current) => withoutCurrentLocationRouteContext(current));
+      return;
+    }
+    const safeUpdate = update.kind === "nearby" && update.value.routeOrigin &&
+      isCurrentLocationOriginLabel(update.value.routeOrigin)
+      ? {
+          kind: "nearby" as const,
+          value: {
+            center: update.value.center,
+            categories: update.value.categories,
+            radiusMeters: update.value.radiusMeters,
+            candidateNames: update.value.candidateNames,
+          },
+        }
+      : update;
+    setLocationContext((current) => withoutCurrentLocationRouteContext(
+      mergeLocationContext(current, safeUpdate) as LocationContext | null,
+    ));
   }, []);
 
   useEffect(() => {
@@ -397,22 +445,89 @@ export function HermesChat() {
   }
 
   async function signOut() {
+    if (signingOut) return;
+    setSigningOut(true);
     abortControllerRef.current?.abort();
-    await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
-    await authSignOut({ redirect: false });
-    setSession((current) =>
-      current ? { ...current, authenticated: false } : current,
-    );
+    routeLocationRequestIdRef.current += 1;
     setAuthError("");
     sessionStorage.removeItem(MESSAGE_HISTORY_KEY);
     sessionStorage.removeItem(LOCATION_CONTEXT_KEY);
     setMessages([]);
     setLocationContext(null);
+    setCurrentRouteLocation(null);
+    setLocatingRouteOrigin(false);
+    setRouteLocationError("");
     setChatError(null);
     setToolStepsByMessageId(new Map());
     setActiveAssistantMessageId(null);
     setTodoSnapshot(null);
     setStreaming(false);
+    setSession((current) =>
+      current ? { ...current, authenticated: false } : current,
+    );
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
+    await authSignOut({ redirect: false }).catch(() => null);
+    setSigningOut(false);
+  }
+
+  function requestCurrentRouteLocation() {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setRouteLocationError("This browser cannot provide location. Enter a start point instead.");
+      return;
+    }
+
+    const requestId = ++routeLocationRequestIdRef.current;
+    setLocatingRouteOrigin(true);
+    setRouteLocationError("");
+
+    try {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          if (requestId !== routeLocationRequestIdRef.current) return;
+          const coordinates = {
+            lat: position.coords.latitude,
+            lon: position.coords.longitude,
+          };
+          if (!isValidCoordinates(coordinates)) {
+            setRouteLocationError("The browser returned invalid coordinates. Enter a start point instead.");
+            setLocatingRouteOrigin(false);
+            return;
+          }
+          setCurrentRouteLocation({
+            ...coordinates,
+            accuracyMeters: Number.isFinite(position.coords.accuracy)
+              ? Math.max(0, position.coords.accuracy)
+              : 0,
+          });
+          setLocationContext((current) => withoutCurrentLocationRouteContext(current));
+          setLocatingRouteOrigin(false);
+        },
+        (error) => {
+          if (requestId !== routeLocationRequestIdRef.current) return;
+          setRouteLocationError(
+            error.code === 1
+              ? "Location permission was denied. Allow it in browser settings or enter a start point."
+              : error.code === 3
+                ? "Location request timed out. Try again or enter a start point."
+                : "Your location is unavailable. Try again or enter a start point.",
+          );
+          setLocatingRouteOrigin(false);
+        },
+        { enableHighAccuracy: true, maximumAge: 60_000, timeout: 10_000 },
+      );
+    } catch {
+      if (requestId !== routeLocationRequestIdRef.current) return;
+      setRouteLocationError("The browser could not start location lookup. Use HTTPS or enter a start point.");
+      setLocatingRouteOrigin(false);
+    }
+  }
+
+  function clearCurrentRouteLocation() {
+    routeLocationRequestIdRef.current += 1;
+    setCurrentRouteLocation(null);
+    setLocatingRouteOrigin(false);
+    setRouteLocationError("");
+    setLocationContext((current) => withoutCurrentLocationRouteContext(current));
   }
 
   function startNewConversation() {
@@ -509,6 +624,9 @@ export function HermesChat() {
         body: JSON.stringify({
           messages: [{ role: "user", content }],
           locationContext,
+          ...(currentRouteLocation
+            ? { routeOriginPreference: "current-location" }
+            : {}),
           sessionId: conversationId,
           requestId,
         }),
@@ -728,9 +846,9 @@ export function HermesChat() {
 
 
   if (!session.authenticated) {
-    const canSubmit = authMode === "register"
+    const canSubmit = !signingOut && (authMode === "register"
       ? Boolean(authName.trim() && authUsername.trim() && authEmail.trim() && authPassword.length >= 8)
-      : Boolean(authEmail.trim() && authPassword.length >= 8);
+      : Boolean(authEmail.trim() && authPassword.length >= 8));
     const title = authMode === "register"
       ? "Create your chat account"
       : "Sign in to Eric AI";
@@ -760,6 +878,7 @@ export function HermesChat() {
               type="button"
               role="tab"
               aria-selected={authMode === "register"}
+              disabled={signingOut}
               onClick={() => { setAuthMode("register"); setAuthError(""); }}
               className={cn(
                 "min-h-11 rounded-md px-2 text-sm font-medium transition-colors",
@@ -772,6 +891,7 @@ export function HermesChat() {
               type="button"
               role="tab"
               aria-selected={authMode === "signin"}
+              disabled={signingOut}
               onClick={() => { setAuthMode("signin"); setAuthError(""); }}
               className={cn(
                 "min-h-11 rounded-md px-2 text-sm font-medium",
@@ -828,7 +948,7 @@ export function HermesChat() {
   }
 
   const mode = modeCopy(session.chatMode);
-  const composerDisabled = streaming || session.chatMode === "unconfigured";
+  const composerDisabled = streaming || signingOut || session.chatMode === "unconfigured";
 
   return (
     <main
@@ -881,6 +1001,7 @@ export function HermesChat() {
               variant="ghost"
               className="tactile-button min-h-11 rounded-md text-[#5f7078] hover:bg-[#e9eff1] hover:text-[#20313a] text-sm"
               onClick={() => void signOut()}
+              disabled={signingOut}
             >
               <LogOut
                 className="size-3.5"
@@ -965,6 +1086,7 @@ export function HermesChat() {
                         message={message}
                         userName={session.profile?.displayName ?? "You"}
                         toolSteps={toolStepsByMessageId.get(message.id) ?? []}
+                        routeOriginCoordinates={routeOriginCoordinates}
                         onLocationContextChange={handleLocationContextChange}
                         streaming={
                           streaming && activeAssistantMessageId === message.id
@@ -1072,6 +1194,46 @@ export function HermesChat() {
             </Button>
           </InputGroup>
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[#718087]">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+              <Button
+                type="button"
+                variant="ghost"
+                className="min-h-11 rounded-md px-2 text-xs text-[#344a54] hover:bg-[#edf2f4] hover:text-[#20313a]"
+                onClick={requestCurrentRouteLocation}
+                disabled={composerDisabled || locatingRouteOrigin}
+              >
+                {locatingRouteOrigin ? (
+                  <LoaderCircle className="size-3.5 animate-spin" data-icon="inline-start" aria-hidden="true" />
+                ) : (
+                  <MapPin className="size-3.5" data-icon="inline-start" aria-hidden="true" />
+                )}
+                {locatingRouteOrigin
+                  ? "Locating…"
+                  : currentRouteLocation
+                    ? "Update route location"
+                    : "Use my location for routes"}
+              </Button>
+              {currentRouteLocation ? (
+                <>
+                  <span role="status" aria-label="Route origin location">
+                    Using your location as the default route start · accuracy ±{Math.round(currentRouteLocation.accuracyMeters)} m.
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="min-h-11 rounded-md px-2 text-xs text-[#5f7078] hover:bg-[#edf2f4] hover:text-[#20313a]"
+                    onClick={clearCurrentRouteLocation}
+                    disabled={composerDisabled}
+                  >
+                    Clear location
+                  </Button>
+                </>
+              ) : null}
+              <span>Location is requested only on click. Coordinates are sent to the map-routing provider (OSRM) for route calculations. They are not sent to AI chat or saved chat history and clear on refresh.</span>
+              {routeLocationError ? (
+                <span role="alert" className="text-[#8a3832]">{routeLocationError}</span>
+              ) : null}
+            </div>
             <span>Web search is automatic when useful; search terms may go to external providers. Avoid secrets.</span>
             <span className="ml-auto">
               Enter to send · Shift+Enter for a new line
