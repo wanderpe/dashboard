@@ -8,11 +8,9 @@ import {
   Footprints,
   LoaderCircle,
   RotateCcw,
-  ZoomIn,
-  ZoomOut,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { Map as LeafletMap } from "leaflet";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -81,6 +79,11 @@ type RouteResultSession = {
   route: RouteResult;
 };
 type RouteStatus = "loading" | "pinning" | "ready" | "error";
+
+const RouteMapCanvas = dynamic(
+  () => import("./mapcn-map-renderer").then((module) => module.RouteMapRenderer),
+  { ssr: false, loading: () => null },
+);
 
 const modeOptions = [
   { value: "driving", label: "Driving", Icon: CarFront },
@@ -218,21 +221,6 @@ function endpointLabel(endpoint: Endpoint) {
   return endpoint === "origin" ? "Start point" : "Destination";
 }
 
-function tooltipText(text: string) {
-  const element = document.createElement("span");
-  element.textContent = text;
-  return element;
-}
-
-function markerIcon(L: typeof import("leaflet"), letter: string, variant: "start" | "end") {
-  return L.divIcon({
-    className: "cartman-route-marker-host",
-    html: `<span class="cartman-route-marker cartman-route-marker--${variant}" aria-hidden="true">${letter}</span>`,
-    iconSize: [30, 30],
-    iconAnchor: [15, 15],
-  });
-}
-
 export function CartmanRouteMapWidget({
   widget,
   messageId,
@@ -282,8 +270,6 @@ export function CartmanRouteMapWidget({
     renderContext.generation,
   ) ?? {};
   const mapId = useId();
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const leafletMapRef = useRef<LeafletMap | null>(null);
 
   useLayoutEffect(() => {
     const nextInputs = { origin: widget.origin, destination: widget.destination };
@@ -403,88 +389,6 @@ export function CartmanRouteMapWidget({
 
     return () => controller.abort();
   }, [widget.origin, widget.destination, retryCount]);
-
-  useEffect(() => {
-    if (!routeData || !mapContainerRef.current) return;
-
-    let cancelled = false;
-    let map: LeafletMap | null = null;
-    let resizeObserver: ResizeObserver | null = null;
-
-    void import("leaflet")
-      .then((L) => {
-        if (cancelled || !mapContainerRef.current) return;
-        map = L.map(mapContainerRef.current, {
-          zoomControl: false,
-          scrollWheelZoom: false,
-          keyboard: true,
-          preferCanvas: true,
-        });
-        leafletMapRef.current = map;
-
-        const tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          maxZoom: 19,
-          attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>',
-        });
-        tiles.on("tileerror", () => {
-          if (!cancelled) setTileError(true);
-        });
-        tiles.addTo(map);
-
-        L.polyline(routeData.geometry, {
-          color: "#ad342d",
-          weight: 5,
-          opacity: 0.9,
-          lineCap: "round",
-          lineJoin: "round",
-        }).addTo(map);
-
-        const start = L.marker([routeData.origin.lat, routeData.origin.lon], {
-          icon: markerIcon(L, "A", "start"),
-          title: `Start: ${routeData.origin.label}`,
-          alt: `Start: ${routeData.origin.label}`,
-          keyboard: true,
-          riseOnHover: true,
-        }).addTo(map);
-        start.bindTooltip(tooltipText(`Start · ${routeData.origin.label}`), {
-          direction: "top",
-          offset: [0, -12],
-        });
-
-        const end = L.marker([routeData.destination.lat, routeData.destination.lon], {
-          icon: markerIcon(L, "B", "end"),
-          title: `Destination: ${routeData.destination.label}`,
-          alt: `Destination: ${routeData.destination.label}`,
-          keyboard: true,
-          riseOnHover: true,
-        }).addTo(map);
-        end.bindTooltip(tooltipText(`Destination · ${routeData.destination.label}`), {
-          direction: "top",
-          offset: [0, -12],
-        });
-
-        const bounds = L.latLngBounds([
-          ...routeData.geometry.map(([lat, lon]) => L.latLng(lat, lon)),
-          L.latLng(routeData.origin.lat, routeData.origin.lon),
-          L.latLng(routeData.destination.lat, routeData.destination.lon),
-        ]);
-        map.fitBounds(bounds, { padding: [38, 38], maxZoom: 13 });
-        requestAnimationFrame(() => map?.invalidateSize());
-        resizeObserver = new ResizeObserver(() => map?.invalidateSize());
-        resizeObserver.observe(mapContainerRef.current);
-      })
-      .catch(() => {
-        if (!cancelled) setTileError(true);
-      });
-
-    return () => {
-      cancelled = true;
-      resizeObserver?.disconnect();
-      map?.remove();
-      leafletMapRef.current = null;
-    };
-  }, [routeData]);
 
   function chooseMode(nextMode: TravelMode) {
     if (nextMode === mode) return;
@@ -920,13 +824,18 @@ export function CartmanRouteMapWidget({
             onMapPoint={setDraftFromMap}
             onTileError={() => setTileError(true)}
           />
+        ) : routeData ? (
+          <RouteMapCanvas
+            id={mapId}
+            route={routeData}
+            onMapError={() => setTileError(true)}
+          />
         ) : (
           <div
-            ref={mapContainerRef}
             id={mapId}
             className="absolute inset-0"
             role="region"
-            aria-label={`Interactive route map from ${routeData?.origin.label ?? widget.origin} to ${routeData?.destination.label ?? widget.destination}`}
+            aria-label={`Interactive route map from ${widget.origin} to ${widget.destination}`}
             aria-roledescription="map"
           />
         )}
@@ -955,33 +864,6 @@ export function CartmanRouteMapWidget({
                 Try again
               </Button>
             </div>
-          </div>
-        ) : null}
-
-        {status === "ready" && routeData ? (
-          <div className="absolute right-3 top-3 z-[1000] flex flex-col gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-lg"
-              className="min-h-11 min-w-11 bg-card/95 shadow-sm backdrop-blur-sm"
-              aria-label="Zoom in"
-              aria-controls={mapId}
-              onClick={() => leafletMapRef.current?.zoomIn()}
-            >
-              <ZoomIn aria-hidden="true" />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-lg"
-              className="min-h-11 min-w-11 bg-card/95 shadow-sm backdrop-blur-sm"
-              aria-label="Zoom out"
-              aria-controls={mapId}
-              onClick={() => leafletMapRef.current?.zoomOut()}
-            >
-              <ZoomOut aria-hidden="true" />
-            </Button>
           </div>
         ) : null}
 

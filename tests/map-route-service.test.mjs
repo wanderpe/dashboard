@@ -21,7 +21,7 @@ test("validates and normalizes the map API request independently of the model ou
   assert.equal(mapRoute.parseMapRouteRequest({ origin: "x".repeat(161), destination: "B" }), null);
 });
 
-test("fetches geocoding and routing data, then normalizes it for Leaflet", async () => {
+test("fetches geocoding and routing data, then preserves the lat/lon route geometry contract", async () => {
   assert.equal(typeof mapRoute.fetchMapRoute, "function");
   const requestedUrls = [];
   const fetchImpl = async (input) => {

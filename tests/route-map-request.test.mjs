@@ -70,7 +70,7 @@ test("only allows map pin placement while an endpoint is active", () => {
   assert.equal(canPlacePin("destination"), true);
 });
 
-test("only returns validated endpoint coordinates for Leaflet markers", () => {
+test("only returns validated endpoint coordinates for map markers", () => {
   const markerPoint = routeMapRequest.endpointMarkerPoint;
   const resolved = { lat: 10.32, lon: 123.94 };
   const confirmed = { lat: 10.321, lon: 123.941 };

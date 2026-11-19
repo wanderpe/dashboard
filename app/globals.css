@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "leaflet/dist/leaflet.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -125,6 +124,24 @@
   body {
     @apply bg-background text-foreground;
   }
+  .maplibregl-popup-content {
+    @apply bg-transparent! shadow-none! p-0! rounded-none!;
+  }
+  .maplibregl-popup-tip {
+    @apply hidden!;
+  }
+  .maplibregl-ctrl-attrib {
+    @apply bg-background! text-muted-foreground! border-border! rounded-md! border! shadow-sm!;
+  }
+  .maplibregl-ctrl-attrib a {
+    @apply text-muted-foreground!;
+  }
+  .maplibregl-ctrl-attrib a:hover {
+    @apply text-foreground!;
+  }
+  .maplibregl-ctrl-attrib-button {
+    @apply bg-transparent! dark:invert;
+  }
 }
 
 .ambient-canvas {
@@ -185,22 +202,18 @@
   }
 }
 
-.leaflet-container {
+.maplibregl-map {
   background-color: var(--muted);
   font: inherit;
 }
 
-.leaflet-control-attribution {
-  border-top-left-radius: 0.375rem;
-  background: color-mix(in oklab, var(--card) 94%, transparent);
-  color: var(--muted-foreground);
+.cartman-map-controls button {
+  width: 44px;
+  height: 44px;
 }
 
-.leaflet-control-attribution a {
-  color: var(--primary);
-}
-
-.cartman-route-marker-host {
+.cartman-route-marker-host,
+.cartman-nearby-marker-host {
   border: 0;
   background: transparent;
 }
@@ -232,7 +245,47 @@
   background: #986900;
 }
 
-.leaflet-marker-icon:focus-visible {
+.cartman-route-marker:focus-visible,
+.cartman-nearby-marker:focus-visible {
   outline: 3px solid var(--ring);
   outline-offset: 3px;
+}
+
+.cartman-nearby-marker {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #fff;
+  border-radius: 9999px;
+  box-shadow: 0 2px 8px rgb(18 35 42 / 32%);
+  cursor: pointer;
+}
+
+.cartman-nearby-marker--selected {
+  width: 24px;
+  height: 24px;
+  border-width: 3px;
+  box-shadow: 0 0 0 3px rgb(18 35 42 / 24%), 0 2px 8px rgb(18 35 42 / 32%);
+}
+
+.cartman-nearby-dot {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border: 3px solid #fff;
+  border-radius: 9999px;
+  box-shadow: 0 2px 8px rgb(18 35 42 / 32%);
+}
+
+.cartman-nearby-dot--origin {
+  background: #263d4a;
+}
+
+.cartman-nearby-dot--destination {
+  background: #ad342d;
+}
+
+.cartman-nearby-dot--center {
+  border-color: #263d4a;
+  background: #fff;
 }

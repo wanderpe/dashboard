@@ -30,7 +30,7 @@ function coordinateAtMapPosition(
   size: { width: number; height: number },
   position: { x: number; y: number },
 ) {
-  const worldSize = 256 * 2 ** zoom;
+  const worldSize = 512 * 2 ** zoom;
   const centerX = ((center.lon + 180) / 360) * worldSize;
   const latitudeRadians = (center.lat * Math.PI) / 180;
   const centerY = ((1 - Math.asinh(Math.tan(latitudeRadians)) / Math.PI) / 2) * worldSize;
@@ -160,11 +160,31 @@ test("renders an interactive, responsive route map from Cartman's validated widg
     mobileCardAfterMode!.x + mobileCardAfterMode!.width,
   );
   await expect(page.getByText("280 km", { exact: true })).toBeVisible();
-  const markers = page.locator(".leaflet-marker-icon");
+  const markers = page.getByRole("img", { name: /^(Start|Destination) ·/ });
   await expect(markers).toHaveCount(2);
+  const markerDistance = async () => {
+    const [start, destination] = await Promise.all(
+      [0, 1].map((index) => markers.nth(index).evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+      })),
+    );
+    return Math.hypot(start.x - destination.x, start.y - destination.y);
+  };
+  const distanceBeforeZoom = await markerDistance();
+  const zoomIn = page.getByRole("region", { name: /Interactive route map/ }).getByRole("button", { name: "Zoom in" });
+  await zoomIn.focus();
+  await expect(zoomIn).toBeFocused();
+  await zoomIn.press("Enter");
+  await expect.poll(markerDistance).toBeGreaterThan(distanceBeforeZoom * 1.5);
+  const distanceAfterZoom = await markerDistance();
+  const zoomOut = page.getByRole("region", { name: /Interactive route map/ }).getByRole("button", { name: "Zoom out" });
+  await zoomOut.focus();
+  await zoomOut.press("Enter");
+  await expect.poll(markerDistance).toBeLessThan(distanceAfterZoom * 0.75);
   await markers.first().hover();
-  await expect(page.locator(".leaflet-tooltip")).toBeVisible();
-  await expect(page.locator(".leaflet-tooltip img[data-xss='yes']")).toHaveCount(0);
+  await expect(page.getByText('Seattle <img data-xss="yes">', { exact: true })).toBeVisible();
+  await expect(page.locator("img[data-xss='yes']")).toHaveCount(0);
   await expect(page.getByText("Here's the route.", { exact: false })).toBeVisible();
   await expect(page.getByText("cartman-widget")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
@@ -299,9 +319,10 @@ test("lets users confirm unmapped endpoints with coordinate fields and map pins 
   await page.getByRole("button", { name: "Confirm start pin" }).click();
   await expect(page.getByRole("spinbutton", { name: "Destination latitude" })).toBeVisible();
   await expect(calculateButton).toBeDisabled();
+  await expect(pickerMap.getByRole("img", { name: "Start pin · confirmed" })).toHaveCount(1);
   await expect.poll(async () => {
     const mapBounds = await pickerMap.boundingBox();
-    const startPinBounds = await pickerMap.locator('[title="Start pin · confirmed"]').boundingBox();
+    const startPinBounds = await pickerMap.getByRole("img", { name: "Start pin · confirmed" }).boundingBox();
     if (!mapBounds || !startPinBounds) return false;
     const mapCenterX = mapBounds.x + mapBounds.width / 2;
     const mapCenterY = mapBounds.y + mapBounds.height / 2;
@@ -320,8 +341,8 @@ test("lets users confirm unmapped endpoints with coordinate fields and map pins 
   await pickerMap.click({ position: { x: 130, y: 100 } });
   await expect(calculateButton).toBeDisabled();
   await page.getByRole("button", { name: "Confirm destination pin" }).click();
-  await expect(pickerMap.locator('[title="Destination pin · confirmed"]')).toHaveCount(1);
-  await expect(pickerMap.locator('[title="Unconfirmed destination pin"]')).toHaveCount(0);
+  await expect(pickerMap.getByRole("img", { name: "Destination pin · confirmed" })).toHaveCount(1);
+  await expect(pickerMap.getByRole("img", { name: "Unconfirmed destination pin" })).toHaveCount(0);
 
   await expect(calculateButton).toBeEnabled();
   await expect.poll(() => routeRequests.length).toBe(1);
@@ -454,7 +475,8 @@ test("retries a pin-backed route when the travel mode changes in flight", async 
   await page.getByRole("spinbutton", { name: "Destination longitude" }).fill("123.942");
   await page.getByRole("button", { name: "Confirm destination pin" }).click();
   const pinMap = page.getByRole("region", { name: "Pin selector map" });
-  await expect(pinMap).toHaveClass(/leaflet-container/);
+  await expect(pinMap.getByRole("img", { name: "Start pin · confirmed" })).toHaveCount(1);
+  await expect(pinMap.getByRole("img", { name: "Destination pin · confirmed" })).toHaveCount(1);
   await page.evaluate(() => {
     AbortController.prototype.abort = () => {};
     const testWindow = window as Window & { __lateDrivingResponseProcessed?: boolean };

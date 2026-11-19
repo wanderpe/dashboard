@@ -4,6 +4,18 @@ function sseFrame(data: unknown) {
   return `data: ${JSON.stringify(data)}`;
 }
 
+async function expectForegroundOsmAttribution(page: Page) {
+  const attribution = page.getByRole("link", { name: "© OpenStreetMap contributors", exact: true });
+  await expect(attribution).toBeVisible();
+  await expect(attribution).toHaveAttribute("href", "https://www.openstreetmap.org/copyright");
+  await attribution.click({ trial: true });
+  await expect.poll(() => attribution.evaluate((link) => {
+    const bounds = link.getBoundingClientRect();
+    const hitTarget = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+    return hitTarget === link || link.contains(hitTarget);
+  })).toBe(true);
+}
+
 async function mockAuthenticatedSession(page: Page) {
   await page.route("**/api/account-auth/session**", (route) =>
     route.fulfill({
@@ -84,11 +96,15 @@ test("renders nearby gyms and stores with adjustable categories and radius", asy
   const nearbyCard = page.getByRole("region", { name: "Nearby places", exact: true });
   await expect(nearbyCard).toBeVisible();
   await expect(nearbyCard.getByText("Nearby search · Photon + OpenStreetMap", { exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: /Map showing nearby places/ })).toBeVisible();
+  const nearbyMap = page.getByRole("region", { name: /Map showing nearby places/ });
+  await expect(nearbyMap).toBeVisible();
+  await expect(nearbyMap.getByRole("button", { name: "Show Iron Gym on map" })).toBeVisible();
+  await expect(nearbyMap.getByRole("button", { name: "Show Town Market on map" })).toBeVisible();
+  await expect(nearbyMap.getByRole("button", { name: "Show Blue Cup Cafe on map" })).toHaveCount(0);
   await expect(nearbyCard.getByText("Iron Gym", { exact: true })).toBeVisible();
   await expect(nearbyCard.getByText("Town Market", { exact: true })).toBeVisible();
   await expect(nearbyCard.getByText("Straight-line · 157 m", { exact: true })).toBeVisible();
-  await nearbyCard.getByRole("button", { name: "Show Iron Gym on map" }).click();
+  await nearbyCard.getByRole("list").getByRole("button", { name: "Show Iron Gym on map" }).click();
   await expect(page.getByRole("region", { name: /Map showing nearby places.*focused on Iron Gym/ })).toBeVisible();
   await expect.poll(() => searches.length).toBe(1);
   expect(searches[0]).toMatchObject({ center: "Mandaue City Hall, Cebu", categories: ["gym", "store"], radiusMeters: 500 });
@@ -104,6 +120,47 @@ test("renders nearby gyms and stores with adjustable categories and radius", asy
   await expect(nearbyCard.getByText("3 km radius", { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
   expect(browserErrors).toEqual([]);
+});
+
+test("keeps nearby results available when OpenStreetMap tiles fail", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await mockAuthenticatedSession(page);
+  await page.route("https://tile.openstreetmap.org/**", (route) =>
+    route.fulfill({ status: 503, contentType: "text/plain", body: "Tile service unavailable" }),
+  );
+  await page.route("**/api/chat", (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+      body: [
+        sseFrame({ choices: [{ delta: { content: ["Nearby results:", "```cartman-widget", JSON.stringify({ type: "nearby-map", center: "Mandaue City Hall, Cebu", categories: ["gym"], radiusMeters: 500 }), "```"].join("\n") }, finish_reason: null }] }),
+        sseFrame({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    }),
+  );
+  await page.route("**/api/map-nearby", (route) =>
+    route.fulfill({
+      json: {
+        center: { label: "Mandaue City Hall, Mandaue, Cebu, Philippines", lat: 10.323, lon: 123.922, source: "nominatim", resolutionState: "RESOLVED", userConfirmed: false },
+        radiusMeters: 500,
+        categories: ["gym"],
+        places: [{ id: "node/101", name: "Iron Gym", lat: 10.324, lon: 123.921, categories: ["gym"], straightLineDistanceMeters: 157, address: null, source: "photon", resolutionState: "RESOLVED", userConfirmed: false }],
+        truncated: false,
+      },
+    }),
+  );
+
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "Message Eric" }).fill("Find a gym near Mandaue City Hall.");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const nearbyCard = page.getByRole("region", { name: "Nearby places", exact: true });
+  await expect(nearbyCard.getByText("Iron Gym", { exact: true })).toBeVisible();
+  await expect(nearbyCard.getByText("Map tiles are unavailable; place results are still shown.", { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
 });
 
 test("does not show stale nearby results while changed criteria are loading or after failure", async ({ page }) => {
@@ -161,10 +218,38 @@ test("does not show stale nearby results while changed criteria are loading or a
   await secondRequestStarted;
   await expect(nearbyCard.getByText("Iron Gym", { exact: true })).toBeHidden();
   await expect(page.getByRole("region", { name: /Map showing nearby places/ })).toHaveCount(0);
+  const ariaHiddenMap = page.locator('[role="region"][aria-label^="Map showing nearby places"][aria-hidden="true"]');
+  await expect(ariaHiddenMap).toHaveCount(1);
+  await expect(ariaHiddenMap.locator('button[aria-label="Zoom in"]')).toHaveCount(0);
+  await expect(ariaHiddenMap.locator('button[aria-label="Zoom out"]')).toHaveCount(0);
+  const ariaHiddenCanvas = ariaHiddenMap.locator("canvas.maplibregl-canvas");
+  const visibleOsmAttribution = ariaHiddenMap.locator('.maplibregl-ctrl-attrib a[href*="openstreetmap.org/copyright"]');
+  await expect(ariaHiddenCanvas).toBeVisible();
+  await ariaHiddenCanvas.focus();
+  await expect(ariaHiddenCanvas).not.toBeFocused();
+  await expect(visibleOsmAttribution).toBeVisible();
+  await expectForegroundOsmAttribution(page);
 
   releaseSecondResponse();
   await expect(nearbyCard.getByText("Nearby search is unavailable.", { exact: true })).toBeVisible();
+  const errorOverlay = nearbyCard.getByText("Couldn’t load nearby places", { exact: true }).locator("xpath=../..");
+  const errorOverlayAlpha = await errorOverlay.evaluate((element) => {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas context is unavailable");
+    context.fillStyle = getComputedStyle(element).backgroundColor;
+    context.fillRect(0, 0, 1, 1);
+    return context.getImageData(0, 0, 1, 1).data[3] / 255;
+  });
+  expect(errorOverlayAlpha).toBe(1);
   await expect(nearbyCard.getByText("Iron Gym", { exact: true })).toHaveCount(0);
+  await expect(ariaHiddenMap).toHaveCount(1);
+  await expect(ariaHiddenMap.locator('button[aria-label="Zoom in"]')).toHaveCount(0);
+  await expect(ariaHiddenMap.locator('button[aria-label="Zoom out"]')).toHaveCount(0);
+  await ariaHiddenCanvas.focus();
+  await expect(ariaHiddenCanvas).not.toBeFocused();
+  await expect(visibleOsmAttribution).toBeVisible();
+  await expectForegroundOsmAttribution(page);
 });
 
 test("compares and displays every nearby route ranked by road distance", async ({ page }) => {

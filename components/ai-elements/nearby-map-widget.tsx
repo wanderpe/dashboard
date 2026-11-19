@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { LayerGroup, Map as LeafletMap } from "leaflet";
-import { LoaderCircle, RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
+import dynamic from "next/dynamic";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { LoaderCircle, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { MAP_NEARBY_CATEGORIES } from "@/lib/map-nearby-categories.mjs";
@@ -77,11 +77,10 @@ type ComparisonState = {
   status: "loading" | "ready" | "error";
   errorMessage: string;
 };
-type NearbyMapRuntime = {
-  map: LeafletMap;
-  markerLayer: LayerGroup;
-  syncMarkers: () => void;
-};
+const NearbyMapCanvas = dynamic(
+  () => import("./mapcn-map-renderer").then((module) => module.NearbyMapRenderer),
+  { ssr: false, loading: () => null },
+);
 type NearbyPlacesMapProps = {
   center: NearbyCenter;
   places: NearbyPlace[];
@@ -128,12 +127,6 @@ function formatDuration(seconds: number) {
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
   return remainder ? `${hours} h ${remainder} min` : `${hours} h`;
-}
-
-function tooltipText(text: string) {
-  const element = document.createElement("span");
-  element.textContent = text;
-  return element;
 }
 
 function isNearbyResult(value: unknown): value is NearbyResult {
@@ -207,179 +200,36 @@ function isRouteComparisonResult(value: unknown): value is RouteComparisonResult
 
 export function NearbyPlacesMap({ center, places, route, selectedPlaceId, ariaHidden, onTileError, onSelectPlace }: NearbyPlacesMapProps) {
   const mapId = useId();
-  const selectedPlace = places.find((place) => place.id === selectedPlaceId) ?? null;
-  const containerRef = useRef<HTMLDivElement>(null);
-  const runtimeRef = useRef<NearbyMapRuntime | null>(null);
-  const propsRef = useRef({ center, places, route, selectedPlaceId, ariaHidden, onTileError, onSelectPlace });
-
-  useLayoutEffect(() => {
-    propsRef.current = { center, places, route, selectedPlaceId, ariaHidden, onTileError, onSelectPlace };
-  }, [center, places, route, selectedPlaceId, ariaHidden, onTileError, onSelectPlace]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let map: LeafletMap | null = null;
-    let resizeObserver: ResizeObserver | null = null;
-
-    void import("leaflet")
-      .then((L) => {
-        if (cancelled || !containerRef.current) return;
-        map = L.map(containerRef.current, {
-          zoomControl: false,
-          scrollWheelZoom: false,
-          keyboard: true,
-          preferCanvas: true,
-        });
-        const initialCenter = propsRef.current.center;
-        map.setView([initialCenter.lat, initialCenter.lon], 14);
-        const tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          maxZoom: 19,
-          attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>',
-        });
-        tiles.on("tileerror", () => propsRef.current.onTileError());
-        tiles.addTo(map);
-        const markerLayer = L.layerGroup().addTo(map);
-
-        const syncMarkers = () => {
-          const current = propsRef.current;
-          markerLayer.clearLayers();
-          if (current.ariaHidden) return;
-          if (current.route) {
-            L.polyline(current.route.route.geometry ?? [], {
-              color: "#ad342d",
-              weight: 5,
-              opacity: 0.9,
-              lineCap: "round",
-              lineJoin: "round",
-            }).addTo(markerLayer);
-            L.circleMarker([current.route.origin.lat, current.route.origin.lon], {
-              radius: 8,
-              color: "#ffffff",
-              weight: 3,
-              fillColor: "#263d4a",
-              fillOpacity: 1,
-            })
-              .addTo(markerLayer)
-              .bindTooltip(tooltipText(`Route origin · ${current.route.origin.label}`), { direction: "top" });
-            L.circleMarker([current.route.route.lat, current.route.route.lon], {
-              radius: 8,
-              color: "#ffffff",
-              weight: 3,
-              fillColor: "#ad342d",
-              fillOpacity: 1,
-            })
-              .addTo(markerLayer)
-              .bindTooltip(tooltipText(`Route destination · ${current.route.route.name}`), { direction: "top" });
-          }
-          L.circleMarker([current.center.lat, current.center.lon], {
-            radius: 8,
-            color: "#263d4a",
-            weight: 3,
-            fillColor: "#ffffff",
-            fillOpacity: 1,
-          })
-            .addTo(markerLayer)
-            .bindTooltip(tooltipText(`Search center · ${current.center.label}`), { direction: "top" });
-
-          for (const place of current.places) {
-            const primaryCategory = place.categories.find(isNearbyCategory);
-            const label = `${place.name} · ${place.categories.map(categoryLabel).join(", ")}`;
-            const selected = current.selectedPlaceId === place.id;
-            L.circleMarker([place.lat, place.lon], {
-              radius: selected ? 11 : 8,
-              color: "#ffffff",
-              weight: selected ? 3 : 2,
-              fillColor: primaryCategory ? CATEGORY_COLORS[primaryCategory] : "#315d70",
-              fillOpacity: 0.95,
-            })
-              .addTo(markerLayer)
-              .bindTooltip(tooltipText(label), { direction: "top" })
-              .bindPopup(tooltipText([place.name, place.address].filter(Boolean).join("\n")))
-              .on("click", () => propsRef.current.onSelectPlace(place));
-          }
-
-          const selectedPlace = current.places.find((place) => place.id === current.selectedPlaceId);
-          if (selectedPlace) {
-            map?.setView(
-              [selectedPlace.lat, selectedPlace.lon],
-              Math.max(map?.getZoom() ?? 14, 16),
-              { animate: false },
-            );
-          } else if (current.places.length > 0) {
-            const points = [
-              [current.center.lat, current.center.lon] as [number, number],
-              ...current.places.map((place) => [place.lat, place.lon] as [number, number]),
-              ...(current.route ? [
-                [current.route.origin.lat, current.route.origin.lon] as [number, number],
-                ...((current.route.route.geometry ?? []).map(([lat, lon]) => [lat, lon] as [number, number])),
-                [current.route.route.lat, current.route.route.lon] as [number, number],
-              ] : []),
-            ];
-            map?.fitBounds(L.latLngBounds(points), { padding: [36, 36], maxZoom: 16, animate: false });
-          } else {
-            map?.setView([current.center.lat, current.center.lon], 14);
-          }
-        };
-
-        runtimeRef.current = { map, markerLayer, syncMarkers };
-        syncMarkers();
-        requestAnimationFrame(() => map?.invalidateSize());
-        resizeObserver = new ResizeObserver(() => map?.invalidateSize());
-        resizeObserver.observe(containerRef.current);
-      })
-      .catch(() => {
-        if (!cancelled) propsRef.current.onTileError();
-      });
-
-    return () => {
-      cancelled = true;
-      resizeObserver?.disconnect();
-      map?.remove();
-      runtimeRef.current = null;
-    };
-  }, [mapId]);
-
-  useEffect(() => {
-    runtimeRef.current?.syncMarkers();
-  }, [center, places, route, selectedPlaceId, ariaHidden]);
+  const mapPlaces = useMemo(
+    () => places.map((place) => {
+      const primaryCategory = place.categories.find(isNearbyCategory);
+      return {
+        id: place.id,
+        name: place.name,
+        lat: place.lat,
+        lon: place.lon,
+        address: place.address,
+        markerLabel: `${place.name} · ${place.categories.map(categoryLabel).join(", ")}`,
+        color: primaryCategory ? CATEGORY_COLORS[primaryCategory] ?? "#315d70" : "#315d70",
+      };
+    }),
+    [places],
+  );
 
   return (
-    <div className="absolute inset-0">
-      <div
-        ref={containerRef}
-        id={mapId}
-        className="absolute inset-0"
-        role="region"
-        aria-label={`Map showing nearby places around ${center.label}${selectedPlace ? `, focused on ${selectedPlace.name}` : ""}`}
-        aria-hidden={ariaHidden}
-        aria-roledescription="map"
-      />
-      <div className="absolute right-3 top-3 z-[1000] flex flex-col gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="icon-lg"
-          className="min-h-11 min-w-11 bg-card/95 shadow-sm backdrop-blur-sm"
-          aria-label="Zoom in on nearby map"
-          aria-controls={mapId}
-          onClick={() => runtimeRef.current?.map.zoomIn()}
-        >
-          <ZoomIn aria-hidden="true" />
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon-lg"
-          className="min-h-11 min-w-11 bg-card/95 shadow-sm backdrop-blur-sm"
-          aria-label="Zoom out on nearby map"
-          aria-controls={mapId}
-          onClick={() => runtimeRef.current?.map.zoomOut()}
-        >
-          <ZoomOut aria-hidden="true" />
-        </Button>
-      </div>
-    </div>
+    <NearbyMapCanvas
+      id={mapId}
+      center={{ label: center.label, lat: center.lat, lon: center.lon }}
+      places={mapPlaces}
+      route={route}
+      selectedPlaceId={selectedPlaceId}
+      ariaHidden={ariaHidden}
+      onMapError={onTileError}
+      onSelectPlace={(placeId: string) => {
+        const place = places.find((candidate) => candidate.id === placeId);
+        if (place) onSelectPlace(place);
+      }}
+    />
   );
 }
 
@@ -651,10 +501,18 @@ export function CartmanNearbyMapWidget({
               <LoaderCircle className="size-4 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
               Finding nearby places…
             </div>
+            <a
+              href="https://www.openstreetmap.org/copyright"
+              target="_blank"
+              rel="noreferrer"
+              className="pointer-events-auto absolute bottom-2 right-2 z-[1000] rounded border border-border bg-card px-2 py-1 text-[10px] font-medium text-foreground underline underline-offset-2 shadow-sm focus-visible:outline-2 focus-visible:outline-primary"
+            >
+              © OpenStreetMap contributors
+            </a>
           </div>
         ) : null}
         {status === "error" && !result ? (
-          <div className="absolute inset-0 z-[500] flex items-center justify-center bg-muted/95 p-5">
+          <div className="absolute inset-0 z-[500] flex items-center justify-center bg-muted p-5">
             <div className="max-w-sm text-center">
               <p className="text-sm font-medium text-foreground">Couldn’t load nearby places</p>
               <p className="mt-1 text-sm text-muted-foreground">{errorMessage}</p>
@@ -663,6 +521,14 @@ export function CartmanNearbyMapWidget({
                 Try again
               </Button>
             </div>
+            <a
+              href="https://www.openstreetmap.org/copyright"
+              target="_blank"
+              rel="noreferrer"
+              className="absolute bottom-2 right-2 z-[1000] rounded border border-border bg-card px-2 py-1 text-[10px] font-medium text-foreground underline underline-offset-2 shadow-sm focus-visible:outline-2 focus-visible:outline-primary"
+            >
+              © OpenStreetMap contributors
+            </a>
           </div>
         ) : null}
         {tileError && result ? (
